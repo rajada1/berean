@@ -164,6 +164,7 @@ async function postInlineIssues(prInfo: PRInfo, reviewResult: ReviewResult) {
 function formatReviewAsMarkdown(reviewResult: ReviewResult): string {
   let md = '## 🔍 AI Code Review\n\n';
 
+  // If we have structured data, use it
   if (reviewResult.summary) {
     md += `### Summary\n${reviewResult.summary}\n\n`;
   }
@@ -186,6 +187,9 @@ function formatReviewAsMarkdown(reviewResult: ReviewResult): string {
       }
       md += '\n';
     }
+  } else if (!reviewResult.summary && reviewResult.review) {
+    // No structured data, use raw review
+    md += reviewResult.review + '\n\n';
   } else {
     md += '✅ **No issues found!** Code looks good.\n\n';
   }

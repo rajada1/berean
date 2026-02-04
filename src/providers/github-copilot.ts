@@ -88,7 +88,14 @@ export async function reviewCode(
 
     // Try to parse as JSON
     try {
-      const parsed = JSON.parse(content) as {
+      // Try to extract JSON if wrapped in markdown code blocks
+      let jsonContent = content;
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        jsonContent = jsonMatch[1].trim();
+      }
+      
+      const parsed = JSON.parse(jsonContent) as {
         summary?: string;
         issues?: ReviewResult['issues'];
         positives?: string[];
@@ -124,7 +131,7 @@ export async function reviewCode(
 function buildReviewPrompt(language: string): string {
   return `You are an expert code reviewer. Analyze the provided code changes (git diff) and provide a comprehensive review.
 
-Respond in ${language} with a JSON object containing:
+You MUST respond with ONLY a valid JSON object (no markdown, no code blocks, no extra text). The JSON must contain:
 
 {
   "summary": "Brief summary of what the changes do (2-3 sentences)",
@@ -141,19 +148,19 @@ Respond in ${language} with a JSON object containing:
   "recommendations": ["General recommendations for improvement"]
 }
 
-IMPORTANT for issues:
-- "file" must be the EXACT file path as shown in the diff (e.g., "/src/services/api.ts")
-- "line" must be a specific line number from the NEW version of the file (right side of diff)
-- "suggestion" should contain the corrected code if you're suggesting a specific fix
+CRITICAL RULES:
+1. Response must be ONLY the JSON object - no markdown, no \`\`\`json blocks, just raw JSON
+2. "file" must be the EXACT file path as shown in the diff (e.g., "/src/services/api.ts")
+3. "line" must be a specific line number from the NEW version of the file
+4. "issues" array can be empty [] if there are no problems
+5. All text content must be in ${language}
 
 Severity levels:
 - critical: Security vulnerabilities, bugs that will cause crashes, data loss
 - warning: Code smells, potential bugs, performance issues
 - suggestion: Style improvements, refactoring opportunities
 
-Be specific and actionable. Reference exact file paths and line numbers.
-Focus on meaningful issues, not trivial style preferences.
-If the code is good, say so - don't invent problems.`;
+Be specific and actionable. If the code is good, return empty issues array and list positives.`;
 }
 
 /**
