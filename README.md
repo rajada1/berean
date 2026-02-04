@@ -1,5 +1,7 @@
 # Berean 🔍
 
+> **🌍 Language / Idioma:** **English** | [Português](README.pt-BR.md)
+
 AI-powered code review CLI for Azure DevOps Pull Requests using GitHub Copilot.
 
 *Like the Bereans who examined everything carefully (Acts 17:11), this tool examines your code with diligence.*
