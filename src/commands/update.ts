@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import { execSync } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -48,10 +49,14 @@ export const updateCommand = new Command('update')
       console.log(chalk.green('\n✓ Berean updated successfully!'));
       
       // Show current version
-      const pkg = await import(path.join(projectRoot, 'package.json'), {
-        assert: { type: 'json' }
-      });
-      console.log(chalk.gray(`  Version: ${pkg.default.version}`));
+      try {
+        const pkgPath = path.join(projectRoot, 'package.json');
+        const pkgContent = fs.readFileSync(pkgPath, 'utf-8');
+        const pkg = JSON.parse(pkgContent);
+        console.log(chalk.gray(`  Version: ${pkg.version}`));
+      } catch {
+        // Ignore version display error
+      }
 
     } catch (error) {
       spinner.fail('Update failed');
