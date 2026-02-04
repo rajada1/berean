@@ -371,3 +371,207 @@ function generateSimpleDiff(oldContent: string, newContent: string, maxChars: nu
   
   return result.join('\n');
 }
+
+export interface PostCommentResult {
+  success: boolean;
+  threadId?: number;
+  error?: string;
+}
+
+export interface InlineComment {
+  filePath: string;
+  line: number;
+  content: string;
+}
+
+/**
+ * Post a general comment to a PR
+ */
+export async function postPRComment(
+  prInfo: PRInfo, 
+  comment: string
+): Promise<PostCommentResult> {
+  const pat = getAzureDevOpsPAT();
+  
+  if (!pat) {
+    return { success: false, error: 'Azure DevOps PAT not configured' };
+  }
+
+  try {
+    const baseUrl = prInfo.hostname 
+      ? `https://${prInfo.hostname}`
+      : `https://dev.azure.com/${prInfo.organization}`;
+    
+    const apiBase = `${baseUrl}/${prInfo.project}/_apis`;
+    const authHeader = `Basic ${Buffer.from(':' + pat).toString('base64')}`;
+    
+    const headers = {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+
+    const threadPayload = {
+      comments: [
+        {
+          parentCommentId: 0,
+          content: comment,
+          commentType: 1
+        }
+      ],
+      status: 1
+    };
+
+    const response = await fetch(
+      `${apiBase}/git/repositories/${prInfo.repository}/pullRequests/${prInfo.pullRequestId}/threads?api-version=7.1`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(threadPayload)
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({})) as { message?: string };
+      return { 
+        success: false, 
+        error: errorData.message || `HTTP ${response.status}` 
+      };
+    }
+
+    const data = await response.json() as { id: number };
+    return { success: true, threadId: data.id };
+
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+/**
+ * Post an inline comment to a specific file/line in a PR
+ */
+export async function postInlineComment(
+  prInfo: PRInfo,
+  filePath: string,
+  line: number,
+  content: string
+): Promise<PostCommentResult> {
+  const pat = getAzureDevOpsPAT();
+  
+  if (!pat) {
+    return { success: false, error: 'Azure DevOps PAT not configured' };
+  }
+
+  try {
+    const baseUrl = prInfo.hostname 
+      ? `https://${prInfo.hostname}`
+      : `https://dev.azure.com/${prInfo.organization}`;
+    
+    const apiBase = `${baseUrl}/${prInfo.project}/_apis`;
+    const authHeader = `Basic ${Buffer.from(':' + pat).toString('base64')}`;
+    
+    const headers = {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+
+    // Get the latest iteration ID
+    const iterResponse = await fetch(
+      `${apiBase}/git/repositories/${prInfo.repository}/pullRequests/${prInfo.pullRequestId}/iterations?api-version=7.1`,
+      { headers }
+    );
+
+    let iterationId = 1;
+    if (iterResponse.ok) {
+      const iterData = await iterResponse.json() as { value: Array<{ id: number }> };
+      const iterations = iterData.value || [];
+      if (iterations.length > 0) {
+        iterationId = iterations[iterations.length - 1].id;
+      }
+    }
+
+    const threadPayload = {
+      comments: [
+        {
+          parentCommentId: 0,
+          content: content,
+          commentType: 1
+        }
+      ],
+      status: 1,
+      threadContext: {
+        filePath: filePath,
+        rightFileStart: { line: line, offset: 1 },
+        rightFileEnd: { line: line, offset: 1 }
+      },
+      pullRequestThreadContext: {
+        iterationContext: {
+          firstComparingIteration: iterationId,
+          secondComparingIteration: iterationId
+        },
+        changeTrackingId: 0
+      }
+    };
+
+    const response = await fetch(
+      `${apiBase}/git/repositories/${prInfo.repository}/pullRequests/${prInfo.pullRequestId}/threads?api-version=7.1`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(threadPayload)
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({})) as { message?: string };
+      return { 
+        success: false, 
+        error: errorData.message || `HTTP ${response.status}` 
+      };
+    }
+
+    const data = await response.json() as { id: number };
+    return { success: true, threadId: data.id };
+
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+/**
+ * Post multiple inline comments
+ */
+export async function postInlineComments(
+  prInfo: PRInfo,
+  comments: InlineComment[]
+): Promise<{ success: number; failed: number; errors: string[] }> {
+  const results = { success: 0, failed: 0, errors: [] as string[] };
+
+  for (const comment of comments) {
+    const result = await postInlineComment(
+      prInfo,
+      comment.filePath,
+      comment.line,
+      comment.content
+    );
+
+    if (result.success) {
+      results.success++;
+    } else {
+      results.failed++;
+      results.errors.push(`${comment.filePath}:${comment.line} - ${result.error}`);
+    }
+
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  return results;
+}

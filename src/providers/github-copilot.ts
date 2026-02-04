@@ -1,15 +1,20 @@
 import { getValidCopilotCredentials } from '../services/copilot-auth.js';
 
+export interface ReviewIssue {
+  severity: 'critical' | 'warning' | 'suggestion';
+  file?: string;
+  line?: number;
+  message: string;
+  suggestion?: string; // Code suggestion for inline comments
+}
+
 export interface ReviewResult {
   success: boolean;
   review?: string;
   summary?: string;
-  issues?: Array<{
-    severity: 'critical' | 'warning' | 'suggestion';
-    file?: string;
-    line?: number;
-    message: string;
-  }>;
+  issues?: ReviewIssue[];
+  positives?: string[];
+  recommendations?: string[];
   error?: string;
   model?: string;
 }
@@ -86,12 +91,15 @@ export async function reviewCode(
       const parsed = JSON.parse(content) as {
         summary?: string;
         issues?: ReviewResult['issues'];
-        review?: string;
+        positives?: string[];
+        recommendations?: string[];
       };
       return {
         success: true,
         summary: parsed.summary,
         issues: parsed.issues,
+        positives: parsed.positives,
+        recommendations: parsed.recommendations,
         review: content,
         model
       };
@@ -123,21 +131,27 @@ Respond in ${language} with a JSON object containing:
   "issues": [
     {
       "severity": "critical|warning|suggestion",
-      "file": "path/to/file.ts",
+      "file": "/path/to/file.ts",
       "line": 42,
-      "message": "Description of the issue and how to fix it"
+      "message": "Description of the issue and how to fix it",
+      "suggestion": "Optional: corrected code snippet if applicable"
     }
   ],
   "positives": ["List of good practices observed"],
   "recommendations": ["General recommendations for improvement"]
 }
 
+IMPORTANT for issues:
+- "file" must be the EXACT file path as shown in the diff (e.g., "/src/services/api.ts")
+- "line" must be a specific line number from the NEW version of the file (right side of diff)
+- "suggestion" should contain the corrected code if you're suggesting a specific fix
+
 Severity levels:
 - critical: Security vulnerabilities, bugs that will cause crashes, data loss
 - warning: Code smells, potential bugs, performance issues
 - suggestion: Style improvements, refactoring opportunities
 
-Be specific and actionable. Reference file paths and line numbers when possible.
+Be specific and actionable. Reference exact file paths and line numbers.
 Focus on meaningful issues, not trivial style preferences.
 If the code is good, say so - don't invent problems.`;
 }

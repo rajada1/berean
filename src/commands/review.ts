@@ -1,8 +1,8 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { parsePRUrl, fetchPRDiff } from '../services/azure-devops.js';
-import { reviewCode, fetchModels } from '../providers/github-copilot.js';
+import { parsePRUrl, fetchPRDiff, postPRComment, postInlineComments, PRInfo } from '../services/azure-devops.js';
+import { reviewCode, fetchModels, ReviewResult, ReviewIssue } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
 import { getAzureDevOpsPAT } from '../services/credentials.js';
 
@@ -17,6 +17,8 @@ export const reviewCommand = new Command('review')
   .option('--language <lang>', 'Response language (default: English)')
   .option('--json', 'Output as JSON')
   .option('--list-models', 'List available models')
+  .option('--post-comment', 'Post review as a comment on the PR')
+  .option('--inline', 'Post inline comments on specific lines')
   .action(async (url, options) => {
     // List models
     if (options.listModels) {
@@ -39,7 +41,7 @@ export const reviewCommand = new Command('review')
     }
 
     // Parse PR info
-    let prInfo;
+    let prInfo: PRInfo | null = null;
     
     if (url) {
       prInfo = parsePRUrl(url);
@@ -89,54 +91,199 @@ export const reviewCommand = new Command('review')
 
     reviewSpinner.succeed('Review complete!');
 
+    // Post comment to PR if requested
+    if (options.postComment) {
+      await postGeneralComment(prInfo, reviewResult);
+    }
+
+    // Post inline comments if requested
+    if (options.inline) {
+      await postInlineIssues(prInfo, reviewResult);
+    }
+
     // Output result
     if (options.json) {
       console.log(JSON.stringify(reviewResult, null, 2));
     } else {
-      console.log('\n' + chalk.blue.bold('═'.repeat(60)));
-      console.log(chalk.blue.bold(' Code Review Results'));
-      console.log(chalk.blue.bold('═'.repeat(60)) + '\n');
-
-      if (reviewResult.summary) {
-        console.log(chalk.white.bold('Summary:'));
-        console.log(chalk.white(reviewResult.summary) + '\n');
-      }
-
-      if (reviewResult.issues && reviewResult.issues.length > 0) {
-        console.log(chalk.white.bold('Issues Found:\n'));
-        
-        for (const issue of reviewResult.issues) {
-          let icon, color;
-          switch (issue.severity) {
-            case 'critical':
-              icon = '🔴';
-              color = chalk.red;
-              break;
-            case 'warning':
-              icon = '🟡';
-              color = chalk.yellow;
-              break;
-            default:
-              icon = '🔵';
-              color = chalk.blue;
-          }
-
-          console.log(`${icon} ${color.bold(issue.severity.toUpperCase())}`);
-          if (issue.file) {
-            console.log(chalk.gray(`   ${issue.file}${issue.line ? `:${issue.line}` : ''}`));
-          }
-          console.log(chalk.white(`   ${issue.message}\n`));
-        }
-      } else if (reviewResult.review) {
-        // Raw review output
-        console.log(reviewResult.review);
-      } else {
-        console.log(chalk.green('✓ No issues found! Code looks good.'));
-      }
-
-      console.log(chalk.blue.bold('═'.repeat(60)));
+      printReviewToTerminal(reviewResult);
     }
   });
+
+async function postGeneralComment(prInfo: PRInfo, reviewResult: ReviewResult) {
+  const spinner = ora('Posting review comment to PR...').start();
+
+  const comment = formatReviewAsMarkdown(reviewResult);
+  const result = await postPRComment(prInfo, comment);
+
+  if (result.success) {
+    spinner.succeed('Review posted to PR!');
+  } else {
+    spinner.fail(`Failed to post comment: ${result.error}`);
+  }
+}
+
+async function postInlineIssues(prInfo: PRInfo, reviewResult: ReviewResult) {
+  const issues = reviewResult.issues || [];
+  const inlineIssues = issues.filter(i => i.file && i.line);
+
+  if (inlineIssues.length === 0) {
+    console.log(chalk.yellow('  No issues with file/line info for inline comments'));
+    return;
+  }
+
+  const spinner = ora(`Posting ${inlineIssues.length} inline comments...`).start();
+
+  const comments = inlineIssues.map(issue => ({
+    filePath: issue.file!,
+    line: issue.line!,
+    content: formatIssueAsMarkdown(issue)
+  }));
+
+  const result = await postInlineComments(prInfo, comments);
+
+  if (result.failed === 0) {
+    spinner.succeed(`Posted ${result.success} inline comments!`);
+  } else if (result.success > 0) {
+    spinner.warn(`Posted ${result.success} comments, ${result.failed} failed`);
+    for (const err of result.errors.slice(0, 3)) {
+      console.log(chalk.gray(`    ${err}`));
+    }
+  } else {
+    spinner.fail(`Failed to post inline comments`);
+    for (const err of result.errors.slice(0, 3)) {
+      console.log(chalk.red(`    ${err}`));
+    }
+  }
+}
+
+function formatReviewAsMarkdown(reviewResult: ReviewResult): string {
+  let md = '## 🔍 AI Code Review\n\n';
+
+  if (reviewResult.summary) {
+    md += `### Summary\n${reviewResult.summary}\n\n`;
+  }
+
+  if (reviewResult.issues && reviewResult.issues.length > 0) {
+    md += '### Issues Found\n\n';
+    
+    for (const issue of reviewResult.issues) {
+      const icon = issue.severity === 'critical' ? '🔴' : 
+                   issue.severity === 'warning' ? '🟡' : '🔵';
+      
+      md += `${icon} **${issue.severity.toUpperCase()}**`;
+      if (issue.file) {
+        md += ` - \`${issue.file}${issue.line ? `:${issue.line}` : ''}\``;
+      }
+      md += `\n${issue.message}\n`;
+      
+      if (issue.suggestion) {
+        md += `\n\`\`\`suggestion\n${issue.suggestion}\n\`\`\`\n`;
+      }
+      md += '\n';
+    }
+  } else {
+    md += '✅ **No issues found!** Code looks good.\n\n';
+  }
+
+  if (reviewResult.positives && reviewResult.positives.length > 0) {
+    md += '### ✅ Good Practices\n';
+    for (const positive of reviewResult.positives) {
+      md += `- ${positive}\n`;
+    }
+    md += '\n';
+  }
+
+  if (reviewResult.recommendations && reviewResult.recommendations.length > 0) {
+    md += '### 💡 Recommendations\n';
+    for (const rec of reviewResult.recommendations) {
+      md += `- ${rec}\n`;
+    }
+    md += '\n';
+  }
+
+  md += '\n---\n*Generated by [Berean](https://github.com/rajada1/berean) 🔍*';
+
+  return md;
+}
+
+function formatIssueAsMarkdown(issue: ReviewIssue): string {
+  const icon = issue.severity === 'critical' ? '🔴' : 
+               issue.severity === 'warning' ? '🟡' : '🔵';
+  
+  let md = `${icon} **${issue.severity.toUpperCase()}**: ${issue.message}`;
+  
+  if (issue.suggestion) {
+    md += `\n\n\`\`\`suggestion\n${issue.suggestion}\n\`\`\``;
+  }
+
+  return md;
+}
+
+function printReviewToTerminal(reviewResult: ReviewResult) {
+  console.log('\n' + chalk.blue.bold('═'.repeat(60)));
+  console.log(chalk.blue.bold(' Code Review Results'));
+  console.log(chalk.blue.bold('═'.repeat(60)) + '\n');
+
+  if (reviewResult.summary) {
+    console.log(chalk.white.bold('Summary:'));
+    console.log(chalk.white(reviewResult.summary) + '\n');
+  }
+
+  if (reviewResult.issues && reviewResult.issues.length > 0) {
+    console.log(chalk.white.bold('Issues Found:\n'));
+    
+    for (const issue of reviewResult.issues) {
+      let icon, color;
+      switch (issue.severity) {
+        case 'critical':
+          icon = '🔴';
+          color = chalk.red;
+          break;
+        case 'warning':
+          icon = '🟡';
+          color = chalk.yellow;
+          break;
+        default:
+          icon = '🔵';
+          color = chalk.blue;
+      }
+
+      console.log(`${icon} ${color.bold(issue.severity.toUpperCase())}`);
+      if (issue.file) {
+        console.log(chalk.gray(`   ${issue.file}${issue.line ? `:${issue.line}` : ''}`));
+      }
+      console.log(chalk.white(`   ${issue.message}`));
+      
+      if (issue.suggestion) {
+        console.log(chalk.green(`   Suggestion: ${issue.suggestion}`));
+      }
+      console.log();
+    }
+  } else if (reviewResult.review && !reviewResult.summary) {
+    // Raw review output (non-JSON response)
+    console.log(reviewResult.review);
+  } else {
+    console.log(chalk.green('✓ No issues found! Code looks good.'));
+  }
+
+  if (reviewResult.positives && reviewResult.positives.length > 0) {
+    console.log(chalk.white.bold('Good Practices:\n'));
+    for (const positive of reviewResult.positives) {
+      console.log(chalk.green(`  ✓ ${positive}`));
+    }
+    console.log();
+  }
+
+  if (reviewResult.recommendations && reviewResult.recommendations.length > 0) {
+    console.log(chalk.white.bold('Recommendations:\n'));
+    for (const rec of reviewResult.recommendations) {
+      console.log(chalk.cyan(`  💡 ${rec}`));
+    }
+    console.log();
+  }
+
+  console.log(chalk.blue.bold('═'.repeat(60)));
+}
 
 async function listModels() {
   if (!isAuthenticated()) {

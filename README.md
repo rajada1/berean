@@ -81,6 +81,15 @@ berean review <url> --json
 
 # List available models
 berean review --list-models
+
+# Post review as a comment on the PR
+berean review <url> --post-comment
+
+# Post inline comments on specific lines
+berean review <url> --inline
+
+# Both: general comment + inline comments
+berean review <url> --post-comment --inline
 ```
 
 ### `berean config`
