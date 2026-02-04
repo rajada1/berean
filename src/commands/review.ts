@@ -1,7 +1,18 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { parsePRUrl, fetchPRDiff, postPRComment, postInlineComments, PRInfo } from '../services/azure-devops.js';
+import { 
+  parsePRUrl, 
+  fetchPRDiff, 
+  postPRComment, 
+  postInlineComments, 
+  PRInfo,
+  findBereanComments,
+  getPRCommits,
+  shouldIgnorePR,
+  addReviewedCommitsTag,
+  updatePRComment
+} from '../services/azure-devops.js';
 import { reviewCode, fetchModels, ReviewResult, ReviewIssue } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
 import { getAzureDevOpsPAT, getConfig } from '../services/credentials.js';
@@ -19,6 +30,9 @@ export const reviewCommand = new Command('review')
   .option('--list-models', 'List available models')
   .option('--post-comment', 'Post review as a comment on the PR')
   .option('--inline', 'Post inline comments on specific lines')
+  .option('--skip-if-reviewed', 'Skip if PR was already reviewed by Berean')
+  .option('--incremental', 'Only review new commits since last Berean review')
+  .option('--force', 'Force review even if @berean: ignore is set')
   .action(async (url, options) => {
     // List models
     if (options.listModels) {
@@ -62,7 +76,7 @@ export const reviewCommand = new Command('review')
       process.exit(1);
     }
 
-    // Fetch PR diff
+    // Fetch PR diff first (we need description to check for ignore)
     const diffSpinner = ora('Fetching PR diff...').start();
     
     const diffResult = await fetchPRDiff(prInfo);
@@ -74,6 +88,63 @@ export const reviewCommand = new Command('review')
     }
 
     diffSpinner.succeed(`Fetched PR: ${diffResult.prDetails?.title || 'Unknown'}`);
+
+    // Check for @berean: ignore in PR description
+    if (!options.force && shouldIgnorePR(diffResult.prDetails?.description)) {
+      console.log(chalk.yellow('⏭️  Skipped: PR description contains @berean: ignore'));
+      console.log(chalk.gray('   Use --force to review anyway'));
+      process.exit(0);
+    }
+
+    // Check for existing Berean reviews and commits
+    let existingReview = null;
+    let reviewedCommits: string[] = [];
+    let allCommits: string[] = [];
+    let newCommits: string[] = [];
+
+    if (options.skipIfReviewed || options.incremental) {
+      const checkSpinner = ora('Checking for existing reviews...').start();
+      
+      const [bereanComments, prCommits] = await Promise.all([
+        findBereanComments(prInfo),
+        getPRCommits(prInfo)
+      ]);
+
+      allCommits = prCommits;
+      
+      if (bereanComments.length > 0) {
+        // Get the most recent Berean comment
+        existingReview = bereanComments[bereanComments.length - 1];
+        reviewedCommits = existingReview.reviewedCommits || [];
+        
+        // Find commits that haven't been reviewed yet
+        newCommits = allCommits.filter(c => !reviewedCommits.includes(c));
+        
+        if (options.skipIfReviewed && newCommits.length === 0) {
+          checkSpinner.succeed('PR already reviewed by Berean (no new commits)');
+          console.log(chalk.gray('   Use --force to review again'));
+          process.exit(0);
+        }
+
+        if (options.incremental && newCommits.length === 0) {
+          checkSpinner.succeed('No new commits since last review');
+          process.exit(0);
+        }
+
+        if (newCommits.length > 0) {
+          checkSpinner.succeed(`Found ${newCommits.length} new commits since last review`);
+        } else {
+          checkSpinner.succeed('No previous Berean review found');
+        }
+      } else {
+        checkSpinner.succeed('No previous Berean review found');
+        newCommits = allCommits;
+      }
+    } else {
+      // Just get commits for tagging
+      allCommits = await getPRCommits(prInfo);
+      newCommits = allCommits;
+    }
 
     // Get config for defaults
     const config = getConfig();
@@ -98,7 +169,7 @@ export const reviewCommand = new Command('review')
 
     // Post comment to PR if requested
     if (options.postComment) {
-      await postGeneralComment(prInfo, reviewResult);
+      await postGeneralComment(prInfo, reviewResult, allCommits, existingReview, options.incremental);
     }
 
     // Post inline comments if requested
@@ -114,16 +185,40 @@ export const reviewCommand = new Command('review')
     }
   });
 
-async function postGeneralComment(prInfo: PRInfo, reviewResult: ReviewResult) {
+async function postGeneralComment(
+  prInfo: PRInfo, 
+  reviewResult: ReviewResult, 
+  commitIds: string[] = [],
+  existingReview: { threadId: number; commentId: number } | null = null,
+  incremental: boolean = false
+) {
   const spinner = ora('Posting review comment to PR...').start();
 
-  const comment = formatReviewAsMarkdown(reviewResult);
-  const result = await postPRComment(prInfo, comment);
+  let comment = formatReviewAsMarkdown(reviewResult);
+  
+  // Add commit tracking tag
+  if (commitIds.length > 0) {
+    comment = addReviewedCommitsTag(comment, commitIds);
+  }
 
-  if (result.success) {
-    spinner.succeed('Review posted to PR!');
+  let result;
+  
+  if (incremental && existingReview) {
+    // Update existing comment
+    result = await updatePRComment(prInfo, existingReview.threadId, existingReview.commentId, comment);
+    if (result.success) {
+      spinner.succeed('Updated existing review comment!');
+    } else {
+      spinner.fail(`Failed to update comment: ${result.error}`);
+    }
   } else {
-    spinner.fail(`Failed to post comment: ${result.error}`);
+    // Create new comment
+    result = await postPRComment(prInfo, comment);
+    if (result.success) {
+      spinner.succeed('Review posted to PR!');
+    } else {
+      spinner.fail(`Failed to post comment: ${result.error}`);
+    }
   }
 }
 
