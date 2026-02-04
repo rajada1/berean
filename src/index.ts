@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { authCommand } from './commands/auth.js';
 import { reviewCommand } from './commands/review.js';
 import { configCommand } from './commands/config.js';
+import { updateCommand } from './commands/update.js';
 
 const program = new Command();
 
@@ -15,5 +16,6 @@ program
 program.addCommand(authCommand);
 program.addCommand(reviewCommand);
 program.addCommand(configCommand);
+program.addCommand(updateCommand);
 
 program.parse();
