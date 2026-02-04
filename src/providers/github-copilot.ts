@@ -95,18 +95,62 @@ export async function reviewCode(
         jsonContent = jsonMatch[1].trim();
       }
       
-      const parsed = JSON.parse(jsonContent) as {
+      // Try to fix truncated JSON by closing brackets
+      let parsed: {
         summary?: string;
         issues?: ReviewResult['issues'];
         positives?: string[];
         recommendations?: string[];
-      };
+      } | null = null;
+      
+      // First try parsing as-is
+      try {
+        parsed = JSON.parse(jsonContent);
+      } catch {
+        // Try to fix truncated JSON
+        let fixedJson = jsonContent;
+        
+        // Count open brackets and close them
+        const openBraces = (fixedJson.match(/{/g) || []).length;
+        const closeBraces = (fixedJson.match(/}/g) || []).length;
+        const openBrackets = (fixedJson.match(/\[/g) || []).length;
+        const closeBrackets = (fixedJson.match(/\]/g) || []).length;
+        
+        // Remove trailing incomplete string/value
+        fixedJson = fixedJson.replace(/,\s*"[^"]*$/, '');
+        fixedJson = fixedJson.replace(/,\s*$/, '');
+        fixedJson = fixedJson.replace(/:\s*"[^"]*$/, ': ""');
+        
+        // Close arrays and objects
+        for (let i = 0; i < openBrackets - closeBrackets; i++) {
+          fixedJson += ']';
+        }
+        for (let i = 0; i < openBraces - closeBraces; i++) {
+          fixedJson += '}';
+        }
+        
+        try {
+          parsed = JSON.parse(fixedJson);
+        } catch {
+          // Still failed, return raw content
+        }
+      }
+      
+      if (parsed) {
+        return {
+          success: true,
+          summary: parsed.summary,
+          issues: parsed.issues,
+          positives: parsed.positives,
+          recommendations: parsed.recommendations,
+          review: content,
+          model
+        };
+      }
+      
+      // Return raw content if parsing failed
       return {
         success: true,
-        summary: parsed.summary,
-        issues: parsed.issues,
-        positives: parsed.positives,
-        recommendations: parsed.recommendations,
         review: content,
         model
       };
