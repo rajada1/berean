@@ -1,13 +1,15 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import { createInterface } from 'readline';
 import { 
   startDeviceFlow, 
   pollForOAuthToken, 
   getAuthStatus,
   isAuthenticated
 } from '../services/copilot-auth.js';
-import { clearCredentials, getConfigDir } from '../services/credentials.js';
+import { clearCredentials, getConfigDir, getConfig, saveConfig } from '../services/credentials.js';
+import { fetchModels } from '../providers/github-copilot.js';
 
 export const authCommand = new Command('auth')
   .description('Manage GitHub Copilot authentication');
@@ -61,6 +63,9 @@ authCommand
         verifySpinner.succeed('Copilot subscription verified!');
         console.log(chalk.green('\n✓ Authentication successful!'));
         console.log(chalk.gray(`  Credentials saved to ${getConfigDir()}/credentials.json`));
+
+        // Prompt to select a model
+        await promptModelSelection();
       } else {
         verifySpinner.fail('Copilot subscription not found');
         console.log(chalk.red('\n✗ No active GitHub Copilot subscription found.'));
@@ -72,6 +77,58 @@ authCommand
       process.exit(1);
     }
   });
+
+async function promptModelSelection() {
+  console.log(chalk.blue('\n📋 Available AI Models:\n'));
+
+  const spinner = ora('Fetching models...').start();
+  
+  try {
+    const models = await fetchModels();
+    spinner.stop();
+
+    const config = getConfig();
+    const currentModel = config['default_model'] || 'gpt-4o';
+
+    models.forEach((model, index) => {
+      const isDefault = model.id === currentModel;
+      const marker = isDefault ? chalk.green(' (default)') : '';
+      console.log(`  ${chalk.yellow(`${index + 1})`)} ${chalk.cyan(model.id)}${marker}`);
+    });
+
+    console.log();
+
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    const answer = await new Promise<string>((resolve) => {
+      rl.question(chalk.white(`Select a default model (1-${models.length}) or press Enter to keep "${currentModel}": `), resolve);
+    });
+
+    rl.close();
+
+    const selection = parseInt(answer, 10);
+
+    if (!isNaN(selection) && selection >= 1 && selection <= models.length) {
+      const selectedModel = models[selection - 1];
+      config['default_model'] = selectedModel.id;
+      saveConfig(config);
+      console.log(chalk.green(`\n✓ Default model set to: ${chalk.cyan(selectedModel.id)}`));
+    } else if (answer.trim() === '') {
+      console.log(chalk.gray(`\n  Keeping default model: ${currentModel}`));
+    } else {
+      console.log(chalk.yellow(`\n  Invalid selection. Keeping default model: ${currentModel}`));
+    }
+
+    console.log(chalk.gray('\n  You can change this later with: berean models select'));
+
+  } catch (error) {
+    spinner.stop();
+    console.log(chalk.yellow('\n  Could not fetch models. You can set a model later with: berean models select'));
+  }
+}
 
 authCommand
   .command('logout')

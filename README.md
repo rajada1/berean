@@ -25,7 +25,7 @@ npm install -g berean
 ## Quick Start
 
 ```bash
-# 1. Authenticate with GitHub Copilot
+# 1. Authenticate with GitHub Copilot (will prompt to select a model)
 berean auth login
 
 # 2. Configure Azure DevOps PAT
@@ -60,6 +60,7 @@ This will:
 2. You open the URL in your browser and enter the code
 3. Authorize the app on GitHub
 4. Token is saved to `~/.berean/credentials.json` (chmod 600)
+5. **List available AI models and prompt you to select a default**
 
 #### CI/CD (environment variables)
 
@@ -71,6 +72,52 @@ export AZURE_DEVOPS_PAT="xxxxx"
 ```
 
 Priority: Environment variables → Config file → Error
+
+---
+
+### `berean models`
+
+List and manage AI models.
+
+```bash
+berean models list      # List all available models
+berean models select    # Interactively select a default model
+berean models set <id>  # Set default model by ID
+berean models current   # Show current default model
+```
+
+#### Examples
+
+```bash
+# List all available models
+berean models list
+
+# Interactively select a model (shows numbered list)
+berean models select
+
+# Set a specific model as default
+berean models set claude-sonnet-4
+
+# Check current default model
+berean models current
+```
+
+#### Interactive Model Selection
+
+When you run `berean models select`, you'll see:
+
+```
+📋 Available AI Models:
+
+  1) gpt-4o (current)
+  2) gpt-4o-mini
+  3) claude-sonnet-4
+  4) claude-3.5-sonnet
+  5) gemini-2.0-flash
+  6) o3-mini
+
+Select a model (1-6) or press Enter to cancel:
+```
 
 ---
 
