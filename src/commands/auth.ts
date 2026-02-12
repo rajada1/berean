@@ -6,7 +6,7 @@ import {
   loginViaCLI,
   logoutViaCLI
 } from '../services/copilot-auth.js';
-import { clearCredentials, getConfigDir, getConfig, saveConfig } from '../services/credentials.js';
+import { clearCredentials, getConfigDir, saveConfig, getDefaultModel } from '../services/credentials.js';
 import { fetchModels } from '../providers/github-copilot.js';
 import { createInterface } from 'readline';
 
@@ -59,8 +59,7 @@ async function promptModelSelection() {
   try {
     const models = await fetchModels();
 
-    const config = getConfig();
-    const currentModel = config['default_model'] || 'gpt-4o';
+    const currentModel = getDefaultModel();
 
     models.forEach((model, index) => {
       const isDefault = model.id === currentModel;

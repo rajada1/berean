@@ -15,7 +15,7 @@ import {
 } from '../services/azure-devops.js';
 import { reviewCode, fetchModels, stopClient, ReviewResult, ReviewIssue } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
-import { getAzureDevOpsPAT, getConfig } from '../services/credentials.js';
+import { getAzureDevOpsPAT, getDefaultModel, getDefaultLanguage } from '../services/credentials.js';
 
 export const reviewCommand = new Command('review')
   .description('Review a Pull Request')
@@ -147,9 +147,8 @@ export const reviewCommand = new Command('review')
     }
 
     // Get config for defaults
-    const config = getConfig();
-    const language = options.language || config.language || 'English';
-    const model = options.model || config.default_model || 'gpt-4o';
+    const language = options.language || getDefaultLanguage();
+    const model = options.model || getDefaultModel();
 
     // Review code
     const reviewSpinner = ora(`Reviewing with ${model}...`).start();

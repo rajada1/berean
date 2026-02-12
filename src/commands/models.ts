@@ -4,7 +4,7 @@ import ora from 'ora';
 import { createInterface } from 'readline';
 import { fetchModels } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
-import { getConfig, saveConfig } from '../services/credentials.js';
+import { getDefaultModel, saveConfig } from '../services/credentials.js';
 
 export const modelsCommand = new Command('models')
   .description('List and select AI models');
@@ -24,12 +24,11 @@ modelsCommand
       const models = await fetchModels();
       spinner.succeed('Available models:\n');
 
-      const config = getConfig();
-      const currentModel = config['default_model'] || 'gpt-4o';
+      const currentModel = getDefaultModel();
 
       for (const model of models) {
-        const isDefault = model.id === currentModel;
-        const marker = isDefault ? chalk.green(' ✓ (current)') : '';
+        const isCurrent = model.id === currentModel;
+        const marker = isCurrent ? chalk.green(' ✓ (current)') : '';
         console.log(`  ${chalk.cyan(model.id)}${marker}`);
         if (model.name !== model.id) {
           console.log(chalk.gray(`    ${model.name}`));
@@ -38,6 +37,7 @@ modelsCommand
 
       console.log();
       console.log(chalk.gray('To set a default model, run: berean models set <model-id>'));
+      console.log(chalk.gray('Or set BEREAN_MODEL environment variable'));
       console.log(chalk.gray('Or interactively: berean models select'));
     } catch (error) {
       spinner.fail('Failed to fetch models');
@@ -68,10 +68,7 @@ modelsCommand
         process.exit(1);
       }
 
-      const config = getConfig();
-      config['default_model'] = model;
-      saveConfig(config);
-
+      saveConfig({ default_model: model });
       spinner.succeed(`Default model set to: ${chalk.cyan(model)}`);
     } catch (error) {
       spinner.fail('Failed to set model');
@@ -95,14 +92,13 @@ modelsCommand
       const models = await fetchModels();
       spinner.stop();
 
-      const config = getConfig();
-      const currentModel = config['default_model'] || 'gpt-4o';
+      const currentModel = getDefaultModel();
 
       console.log(chalk.blue('\n📋 Available AI Models:\n'));
 
       models.forEach((model, index) => {
-        const isDefault = model.id === currentModel;
-        const marker = isDefault ? chalk.green(' (current)') : '';
+        const isCurrent = model.id === currentModel;
+        const marker = isCurrent ? chalk.green(' (current)') : '';
         console.log(`  ${chalk.yellow(`${index + 1})`)} ${chalk.cyan(model.id)}${marker}`);
         if (model.name !== model.id) {
           console.log(chalk.gray(`      ${model.name}`));
@@ -130,8 +126,7 @@ modelsCommand
       }
 
       const selectedModel = models[selection - 1];
-      config['default_model'] = selectedModel.id;
-      saveConfig(config);
+      saveConfig({ default_model: selectedModel.id });
 
       console.log(chalk.green(`\n✓ Default model set to: ${chalk.cyan(selectedModel.id)}`));
 
@@ -146,7 +141,7 @@ modelsCommand
   .command('current')
   .description('Show current default model')
   .action(() => {
-    const config = getConfig();
-    const currentModel = config['default_model'] || 'gpt-4o';
-    console.log(chalk.cyan(currentModel));
+    const currentModel = getDefaultModel();
+    const source = process.env.BEREAN_MODEL ? '(from BEREAN_MODEL env)' : '(from config)';
+    console.log(`${chalk.cyan(currentModel)} ${chalk.gray(source)}`);
   });

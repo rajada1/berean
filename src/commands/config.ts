@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { saveConfig, getConfig, getConfigDir, getAzureDevOpsPAT, getGitHubToken } from '../services/credentials.js';
+import { saveConfig, getConfig, getConfigDir, getAzureDevOpsPAT, getGitHubToken, getDefaultModel, getDefaultLanguage } from '../services/credentials.js';
 
 export const configCommand = new Command('config')
   .description('Manage configuration');
@@ -52,10 +52,16 @@ configCommand
           break;
         }
         case 'default-model':
-          console.log(chalk.white(`default-model: ${config.default_model || 'gpt-4o'}`));
+          console.log(chalk.white(`default-model: ${getDefaultModel()}`));
+          if (process.env.BEREAN_MODEL) {
+            console.log(chalk.gray('  (from BEREAN_MODEL env var)'));
+          }
           break;
         case 'language':
-          console.log(chalk.white(`language: ${config.language || 'English'}`));
+          console.log(chalk.white(`language: ${getDefaultLanguage()}`));
+          if (process.env.BEREAN_LANGUAGE) {
+            console.log(chalk.gray('  (from BEREAN_LANGUAGE env var)'));
+          }
           break;
         default:
           console.log(chalk.red(`✗ Unknown config key: ${key}`));
@@ -79,8 +85,14 @@ configCommand
         : chalk.yellow('using Copilot CLI'));
       
       console.log();
-      console.log(chalk.white('  default-model:'), chalk.cyan(config.default_model || 'gpt-4o'));
-      console.log(chalk.white('  language:'), chalk.cyan(config.language || 'English'));
+      console.log(chalk.white('  default-model:'), chalk.cyan(getDefaultModel()));
+      if (process.env.BEREAN_MODEL) {
+        console.log(chalk.gray('                  (from BEREAN_MODEL env var)'));
+      }
+      console.log(chalk.white('  language:'), chalk.cyan(getDefaultLanguage()));
+      if (process.env.BEREAN_LANGUAGE) {
+        console.log(chalk.gray('             (from BEREAN_LANGUAGE env var)'));
+      }
     }
   });
 

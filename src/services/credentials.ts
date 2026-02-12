@@ -41,6 +41,26 @@ export function getAzureDevOpsPAT(): string | null {
   return config.azure_devops_pat || null;
 }
 
+/**
+ * Get default model from env or config
+ * Priority: BEREAN_MODEL env var → config file → 'gpt-4o'
+ */
+export function getDefaultModel(): string {
+  return process.env.BEREAN_MODEL 
+    || getConfig().default_model 
+    || 'gpt-4o';
+}
+
+/**
+ * Get default language from env or config
+ * Priority: BEREAN_LANGUAGE env var → config file → 'English'
+ */
+export function getDefaultLanguage(): string {
+  return process.env.BEREAN_LANGUAGE 
+    || getConfig().language 
+    || 'English';
+}
+
 export function getConfig(): Config {
   ensureConfigDir();
   
