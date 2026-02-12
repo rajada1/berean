@@ -1,5 +1,5 @@
 import { CopilotClient } from '@github/copilot-sdk';
-import { getGitHubToken } from '../services/credentials.js';
+import { getGitHubTokenFromAzure } from '../services/credentials.js';
 
 export interface ReviewIssue {
   severity: 'critical' | 'warning' | 'suggestion';
@@ -35,7 +35,7 @@ let _client: CopilotClient | null = null;
 async function getClient(): Promise<CopilotClient> {
   if (_client) return _client;
 
-  const token = getGitHubToken();
+  const token = getGitHubTokenFromAzure();
 
   const options: Record<string, unknown> = {};
   

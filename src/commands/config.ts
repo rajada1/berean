@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { saveConfig, getConfig, getConfigDir, getAzureDevOpsPAT, getGitHubToken, getDefaultModel, getDefaultLanguage } from '../services/credentials.js';
+import { saveConfig, getConfig, getConfigDir, getAzureDevOpsPATFromPipeline, getGitHubTokenFromAzure, getDefaultModel, getDefaultLanguage, getDefaultModelSource, getDefaultLanguageSource } from '../services/credentials.js';
 
 export const configCommand = new Command('config')
   .description('Manage configuration');
@@ -42,7 +42,7 @@ configCommand
     if (key) {
       switch (key) {
         case 'azure-pat': {
-          const pat = getAzureDevOpsPAT();
+          const pat = getAzureDevOpsPATFromPipeline();
           if (pat) {
             const masked = pat.substring(0, 6) + '...' + pat.slice(-4);
             console.log(chalk.white(`azure-pat: ${masked}`));
@@ -53,15 +53,11 @@ configCommand
         }
         case 'default-model':
           console.log(chalk.white(`default-model: ${getDefaultModel()}`));
-          if (process.env.BEREAN_MODEL) {
-            console.log(chalk.gray('  (from BEREAN_MODEL env var)'));
-          }
+          console.log(chalk.gray(`  (from ${getDefaultModelSource()})`));
           break;
         case 'language':
           console.log(chalk.white(`language: ${getDefaultLanguage()}`));
-          if (process.env.BEREAN_LANGUAGE) {
-            console.log(chalk.gray('  (from BEREAN_LANGUAGE env var)'));
-          }
+          console.log(chalk.gray(`  (from ${getDefaultLanguageSource()})`));
           break;
         default:
           console.log(chalk.red(`✗ Unknown config key: ${key}`));
@@ -73,8 +69,8 @@ configCommand
       console.log(chalk.white('  Config directory:'), chalk.gray(getConfigDir()));
       console.log();
       
-      const hasPat = !!getAzureDevOpsPAT();
-      const hasToken = !!getGitHubToken();
+      const hasPat = !!getAzureDevOpsPATFromPipeline();
+      const hasToken = !!getGitHubTokenFromAzure();
       
       console.log(chalk.white('  azure-pat:'), hasPat 
         ? chalk.green('configured') 
@@ -86,13 +82,9 @@ configCommand
       
       console.log();
       console.log(chalk.white('  default-model:'), chalk.cyan(getDefaultModel()));
-      if (process.env.BEREAN_MODEL) {
-        console.log(chalk.gray('                  (from BEREAN_MODEL env var)'));
-      }
+      console.log(chalk.gray(`                  (from ${getDefaultModelSource()})`));
       console.log(chalk.white('  language:'), chalk.cyan(getDefaultLanguage()));
-      if (process.env.BEREAN_LANGUAGE) {
-        console.log(chalk.gray('             (from BEREAN_LANGUAGE env var)'));
-      }
+      console.log(chalk.gray(`             (from ${getDefaultLanguageSource()})`));
     }
   });
 

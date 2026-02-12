@@ -15,7 +15,7 @@ import {
 } from '../services/azure-devops.js';
 import { reviewCode, fetchModels, stopClient, ReviewResult, ReviewIssue } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
-import { getAzureDevOpsPAT, getDefaultModel, getDefaultLanguage } from '../services/credentials.js';
+import { getAzureDevOpsPATFromPipeline, getDefaultModel, getDefaultLanguage } from '../services/credentials.js';
 
 export const reviewCommand = new Command('review')
   .description('Review a Pull Request')
@@ -47,7 +47,7 @@ export const reviewCommand = new Command('review')
     }
 
     // Check Azure DevOps PAT
-    if (!getAzureDevOpsPAT()) {
+    if (!getAzureDevOpsPATFromPipeline()) {
       console.log(chalk.red('✗ Azure DevOps PAT not configured.'));
       console.log(chalk.gray('  Set AZURE_DEVOPS_PAT environment variable or run:'));
       console.log(chalk.gray('  berean config set azure-pat <your-pat>'));

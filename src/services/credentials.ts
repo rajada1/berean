@@ -20,45 +20,86 @@ function ensureConfigDir(): void {
 
 /**
  * Get GitHub token from environment variables (SDK priority order)
- * The SDK itself also reads these, but we check them for auth status display
+ * Also checks Azure DevOps variable naming conventions
  */
 export function getGitHubToken(): string | null {
-  return process.env.COPILOT_GITHUB_TOKEN 
-    || process.env.GH_TOKEN 
-    || process.env.GITHUB_TOKEN 
-    || null;
+  return getGitHubTokenFromAzure();
 }
 
 /**
  * Get Azure DevOps PAT from env or config
  */
 export function getAzureDevOpsPAT(): string | null {
-  if (process.env.AZURE_DEVOPS_PAT) {
-    return process.env.AZURE_DEVOPS_PAT;
-  }
-  
-  const config = getConfig();
-  return config.azure_devops_pat || null;
+  return getAzureDevOpsPATFromPipeline();
 }
 
 /**
  * Get default model from env or config
- * Priority: BEREAN_MODEL env var → config file → 'gpt-4o'
+ * Priority: BEREAN_MODEL → BEREAN.MODEL (Azure DevOps format) → config file → 'gpt-4o'
+ * 
+ * Azure DevOps transforms variable names:
+ *   - Pipeline variable "BEREAN_MODEL" → env var "BEREAN_MODEL"
+ *   - Pipeline variable "berean.model" → env var "BEREAN_MODEL" (dots→underscores, uppercased)
+ *   - Variable group "BereanModel" → env var "BEREANMODEL"
  */
 export function getDefaultModel(): string {
-  return process.env.BEREAN_MODEL 
+  return process.env.BEREAN_MODEL
+    || process.env.BEREANMODEL
     || getConfig().default_model 
     || 'gpt-4o';
 }
 
 /**
+ * Get the source of the current model config (for display)
+ */
+export function getDefaultModelSource(): string {
+  if (process.env.BEREAN_MODEL) return 'BEREAN_MODEL env';
+  if (process.env.BEREANMODEL) return 'BEREANMODEL env';
+  if (getConfig().default_model) return 'config file';
+  return 'default';
+}
+
+/**
  * Get default language from env or config
- * Priority: BEREAN_LANGUAGE env var → config file → 'English'
+ * Priority: BEREAN_LANGUAGE → BEREANLANGUAGE → config file → 'English'
  */
 export function getDefaultLanguage(): string {
-  return process.env.BEREAN_LANGUAGE 
+  return process.env.BEREAN_LANGUAGE
+    || process.env.BEREANLANGUAGE
     || getConfig().language 
     || 'English';
+}
+
+/**
+ * Get the source of the current language config (for display)
+ */
+export function getDefaultLanguageSource(): string {
+  if (process.env.BEREAN_LANGUAGE) return 'BEREAN_LANGUAGE env';
+  if (process.env.BEREANLANGUAGE) return 'BEREANLANGUAGE env';
+  if (getConfig().language) return 'config file';
+  return 'default';
+}
+
+/**
+ * Get GitHub token - also checks Azure DevOps common variable names
+ */
+export function getGitHubTokenFromAzure(): string | null {
+  return process.env.COPILOT_GITHUB_TOKEN
+    || process.env.GH_TOKEN
+    || process.env.GITHUB_TOKEN
+    || process.env.GITHUBTOKEN
+    || null;
+}
+
+/**
+ * Get Azure DevOps PAT - also checks Azure pipeline system token
+ */
+export function getAzureDevOpsPATFromPipeline(): string | null {
+  return process.env.AZURE_DEVOPS_PAT
+    || process.env.AZUREDEVOPSPAT
+    || process.env.SYSTEM_ACCESSTOKEN
+    || getConfig().azure_devops_pat
+    || null;
 }
 
 export function getConfig(): Config {

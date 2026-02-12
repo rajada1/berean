@@ -1,4 +1,4 @@
-import { getGitHubToken } from './credentials.js';
+import { getGitHubTokenFromAzure } from './credentials.js';
 import { execSync } from 'child_process';
 
 /**
@@ -6,7 +6,7 @@ import { execSync } from 'child_process';
  */
 export function isAuthenticated(): boolean {
   // Check for explicit token first
-  if (getGitHubToken()) return true;
+  if (getGitHubTokenFromAzure()) return true;
 
   // Check if copilot CLI is logged in
   try {
@@ -29,7 +29,7 @@ export async function getAuthStatus(): Promise<{
   token?: string;
   error?: string;
 }> {
-  const token = getGitHubToken();
+  const token = getGitHubTokenFromAzure();
   
   if (token) {
     // Mask token for display

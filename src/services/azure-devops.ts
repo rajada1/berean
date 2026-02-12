@@ -1,4 +1,4 @@
-import { getAzureDevOpsPAT } from './credentials.js';
+import { getAzureDevOpsPATFromPipeline } from './credentials.js';
 
 export interface PRInfo {
   organization: string;
@@ -71,7 +71,7 @@ export function parsePRUrl(url: string): PRInfo | null {
  * Fetch PR diff from Azure DevOps
  */
 export async function fetchPRDiff(prInfo: PRInfo): Promise<PRDiffResult> {
-  const pat = getAzureDevOpsPAT();
+  const pat = getAzureDevOpsPATFromPipeline();
   
   if (!pat) {
     return {
@@ -395,7 +395,7 @@ const BEREAN_COMMITS_END = ':berean-commits -->';
  * Find existing Berean review comments on a PR
  */
 export async function findBereanComments(prInfo: PRInfo): Promise<BereanComment[]> {
-  const pat = getAzureDevOpsPAT();
+  const pat = getAzureDevOpsPATFromPipeline();
   
   if (!pat) {
     return [];
@@ -485,7 +485,7 @@ export function addReviewedCommitsTag(comment: string, commitIds: string[]): str
  * Get all commit IDs for a PR
  */
 export async function getPRCommits(prInfo: PRInfo): Promise<string[]> {
-  const pat = getAzureDevOpsPAT();
+  const pat = getAzureDevOpsPATFromPipeline();
   
   if (!pat) {
     return [];
@@ -546,7 +546,7 @@ export async function updatePRComment(
   commentId: number,
   newContent: string
 ): Promise<PostCommentResult> {
-  const pat = getAzureDevOpsPAT();
+  const pat = getAzureDevOpsPATFromPipeline();
   
   if (!pat) {
     return { success: false, error: 'Azure DevOps PAT not configured' };
@@ -605,7 +605,7 @@ export async function postPRComment(
   prInfo: PRInfo, 
   comment: string
 ): Promise<PostCommentResult> {
-  const pat = getAzureDevOpsPAT();
+  const pat = getAzureDevOpsPATFromPipeline();
   
   if (!pat) {
     return { success: false, error: 'Azure DevOps PAT not configured' };
@@ -673,7 +673,7 @@ export async function postInlineComment(
   line: number,
   content: string
 ): Promise<PostCommentResult> {
-  const pat = getAzureDevOpsPAT();
+  const pat = getAzureDevOpsPATFromPipeline();
   
   if (!pat) {
     return { success: false, error: 'Azure DevOps PAT not configured' };

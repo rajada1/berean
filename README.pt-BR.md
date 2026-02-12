@@ -73,13 +73,20 @@ Todas as configurações podem ser definidas via variáveis de ambiente, ideal p
 | `GITHUB_TOKEN` | Token do GitHub para API do Copilot | Sim* |
 | `GH_TOKEN` | Alternativa ao GITHUB_TOKEN (compat. GitHub CLI) | Sim* |
 | `COPILOT_GITHUB_TOKEN` | Alternativa ao GITHUB_TOKEN (prioridade máxima) | Sim* |
+| `GITHUBTOKEN` | Alternativa (formato Azure DevOps Variable Groups) | Sim* |
 | `AZURE_DEVOPS_PAT` | Personal Access Token do Azure DevOps | Sim |
+| `AZUREDEVOPSPAT` | Alternativa (formato Azure DevOps Variable Groups) | Sim |
+| `SYSTEM_ACCESSTOKEN` | Token automático do Azure Pipelines | Sim |
 | `BEREAN_MODEL` | Modelo de IA padrão (ex: `gpt-4o`, `claude-sonnet-4`) | Não |
+| `BEREANMODEL` | Alternativa (formato Azure DevOps Variable Groups) | Não |
 | `BEREAN_LANGUAGE` | Idioma das respostas (ex: `Português do Brasil`) | Não |
+| `BEREANLANGUAGE` | Alternativa (formato Azure DevOps Variable Groups) | Não |
 
 \* Pelo menos um token GitHub é necessário (ou login via Copilot CLI).
 
 **Prioridade de configuração:** Variável de ambiente → Arquivo de config (`~/.berean/config.json`) → Valor padrão
+
+> **💡 Azure DevOps Variable Groups:** Variáveis definidas em Variable Groups do Azure Pipelines têm pontos e hifens removidos (ex: `Berean.Model` vira `BEREAN_MODEL`, `BereanModel` vira `BEREANMODEL`). O Berean aceita ambos os formatos automaticamente.
 
 ---
 

@@ -4,7 +4,7 @@ import ora from 'ora';
 import { createInterface } from 'readline';
 import { fetchModels } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
-import { getDefaultModel, saveConfig } from '../services/credentials.js';
+import { getDefaultModel, getDefaultModelSource, saveConfig } from '../services/credentials.js';
 
 export const modelsCommand = new Command('models')
   .description('List and select AI models');
@@ -142,6 +142,6 @@ modelsCommand
   .description('Show current default model')
   .action(() => {
     const currentModel = getDefaultModel();
-    const source = process.env.BEREAN_MODEL ? '(from BEREAN_MODEL env)' : '(from config)';
-    console.log(`${chalk.cyan(currentModel)} ${chalk.gray(source)}`);
+    const source = getDefaultModelSource();
+    console.log(`${chalk.cyan(currentModel)} ${chalk.gray(`(from ${source})`)}`);
   });
