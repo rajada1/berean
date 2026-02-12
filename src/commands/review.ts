@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import * as fs from 'fs';
+import * as path from 'path';
 import { 
   parsePRUrl, 
   fetchPRDiff, 
@@ -15,7 +17,7 @@ import {
 } from '../services/azure-devops.js';
 import { reviewCode, fetchModels, stopClient, ReviewResult, ReviewIssue } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
-import { getAzureDevOpsPATFromPipeline, getDefaultModel, getDefaultLanguage } from '../services/credentials.js';
+import { getAzureDevOpsPATFromPipeline, getDefaultModel, getDefaultLanguage, getRulesPath } from '../services/credentials.js';
 
 export const reviewCommand = new Command('review')
   .description('Review a Pull Request')
@@ -33,6 +35,7 @@ export const reviewCommand = new Command('review')
   .option('--skip-if-reviewed', 'Skip if PR was already reviewed by Berean')
   .option('--incremental', 'Only review new commits since last Berean review')
   .option('--force', 'Force review even if @berean: ignore is set')
+  .option('--rules <path>', 'Path to project rules/guidelines file (or set BEREAN_RULES env)')
   .action(async (url, options) => {
     // List models
     if (options.listModels) {
@@ -150,12 +153,55 @@ export const reviewCommand = new Command('review')
     const language = options.language || getDefaultLanguage();
     const model = options.model || getDefaultModel();
 
+    // Load project rules if specified
+    let rules: string | undefined;
+    const rulesPath = options.rules || getRulesPath();
+    
+    if (rulesPath) {
+      const rulesSpinner = ora('Loading project rules...').start();
+      try {
+        // Support directory (read all files) or single file
+        const resolvedPath = path.resolve(rulesPath);
+        
+        if (fs.existsSync(resolvedPath)) {
+          const stat = fs.statSync(resolvedPath);
+          
+          if (stat.isDirectory()) {
+            // Read all files in the directory
+            const files = fs.readdirSync(resolvedPath)
+              .filter(f => !f.startsWith('.'))
+              .sort();
+            
+            const parts: string[] = [];
+            for (const file of files) {
+              const filePath = path.join(resolvedPath, file);
+              const fileStat = fs.statSync(filePath);
+              if (fileStat.isFile()) {
+                const content = fs.readFileSync(filePath, 'utf-8');
+                parts.push(`### ${file}\n\n${content}`);
+              }
+            }
+            rules = parts.join('\n\n---\n\n');
+            rulesSpinner.succeed(`Loaded ${files.length} rules file(s) from ${rulesPath}`);
+          } else {
+            rules = fs.readFileSync(resolvedPath, 'utf-8');
+            rulesSpinner.succeed(`Loaded rules from ${rulesPath}`);
+          }
+        } else {
+          rulesSpinner.warn(`Rules path not found: ${rulesPath} (continuing without rules)`);
+        }
+      } catch (error) {
+        rulesSpinner.warn(`Failed to load rules: ${error instanceof Error ? error.message : 'Unknown error'} (continuing without rules)`);
+      }
+    }
+
     // Review code
     const reviewSpinner = ora(`Reviewing with ${model}...`).start();
 
     const reviewResult = await reviewCode(diffResult.diff, {
       model: model,
-      language: language
+      language: language,
+      rules: rules
     });
 
     if (!reviewResult.success) {

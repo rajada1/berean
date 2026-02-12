@@ -24,6 +24,7 @@ export interface ReviewOptions {
   model?: string;
   language?: string;
   maxTokens?: number;
+  rules?: string; // Custom rules/guidelines content to include in the prompt
 }
 
 // Singleton client instance
@@ -66,12 +67,12 @@ export async function reviewCode(
   diff: string,
   options: ReviewOptions = {}
 ): Promise<ReviewResult> {
-  const { model = 'gpt-4o', language = 'English' } = options;
+  const { model = 'gpt-4o', language = 'English', rules } = options;
 
   try {
     const client = await getClient();
 
-    const systemPrompt = buildReviewPrompt(language);
+    const systemPrompt = buildReviewPrompt(language, rules);
 
     const session = await client.createSession({
       model,
@@ -182,8 +183,8 @@ function parseReviewResponse(content: string, model: string): ReviewResult {
   }
 }
 
-function buildReviewPrompt(language: string): string {
-  return `You are an expert code reviewer. Analyze the provided code changes (git diff) and provide a comprehensive review.
+function buildReviewPrompt(language: string, rules?: string): string {
+  let prompt = `You are an expert code reviewer. Analyze the provided code changes (git diff) and provide a comprehensive review.
 
 You MUST respond with ONLY a valid JSON object (no markdown, no code blocks, no extra text). The JSON must contain:
 
@@ -215,6 +216,12 @@ Severity levels:
 - suggestion: Style improvements, refactoring opportunities
 
 Be specific and actionable. If the code is good, return empty issues array and list positives.`;
+
+  if (rules) {
+    prompt += `\n\n---\n\nPROJECT-SPECIFIC RULES AND GUIDELINES (use these to evaluate the code):\n\n${rules}`;
+  }
+
+  return prompt;
 }
 
 /**

@@ -81,6 +81,17 @@ export function getDefaultLanguageSource(): string {
 }
 
 /**
+ * Get rules file path from env or config
+ * Priority: BEREAN_RULES → BEREANRULES → config file → null
+ */
+export function getRulesPath(): string | null {
+  return process.env.BEREAN_RULES
+    || process.env.BEREANRULES
+    || getConfig().rules_path
+    || null;
+}
+
+/**
  * Get GitHub token - also checks Azure DevOps common variable names
  */
 export function getGitHubTokenFromAzure(): string | null {
