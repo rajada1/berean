@@ -3,20 +3,13 @@ import * as path from 'path';
 import * as os from 'os';
 
 const CONFIG_DIR = path.join(os.homedir(), '.berean');
-const CREDENTIALS_FILE = path.join(CONFIG_DIR, 'credentials.json');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
-
-export interface Credentials {
-  github_oauth_token?: string;
-  azure_devops_pat?: string;
-  copilot_token?: string;
-  copilot_endpoint?: string;
-  copilot_expires_at?: number;
-}
 
 export interface Config {
   default_model?: string;
   language?: string;
+  azure_devops_pat?: string;
+  [key: string]: string | undefined;
 }
 
 function ensureConfigDir(): void {
@@ -25,80 +18,27 @@ function ensureConfigDir(): void {
   }
 }
 
-export function getCredentials(): Credentials {
-  ensureConfigDir();
-  
-  if (!fs.existsSync(CREDENTIALS_FILE)) {
-    return {};
-  }
-  
-  try {
-    const content = fs.readFileSync(CREDENTIALS_FILE, 'utf-8');
-    return JSON.parse(content);
-  } catch {
-    return {};
-  }
+/**
+ * Get GitHub token from environment variables (SDK priority order)
+ * The SDK itself also reads these, but we check them for auth status display
+ */
+export function getGitHubToken(): string | null {
+  return process.env.COPILOT_GITHUB_TOKEN 
+    || process.env.GH_TOKEN 
+    || process.env.GITHUB_TOKEN 
+    || null;
 }
 
-export function saveCredentials(credentials: Credentials): void {
-  ensureConfigDir();
-  
-  const existing = getCredentials();
-  const merged = { ...existing, ...credentials };
-  
-  fs.writeFileSync(
-    CREDENTIALS_FILE,
-    JSON.stringify(merged, null, 2),
-    { mode: 0o600 }
-  );
-}
-
-export function clearCredentials(): void {
-  if (fs.existsSync(CREDENTIALS_FILE)) {
-    fs.unlinkSync(CREDENTIALS_FILE);
-  }
-}
-
-export function getOAuthToken(): string | null {
-  // Priority: env var > file
-  if (process.env.GITHUB_OAUTH_TOKEN) {
-    return process.env.GITHUB_OAUTH_TOKEN;
-  }
-  
-  const creds = getCredentials();
-  return creds.github_oauth_token || null;
-}
-
+/**
+ * Get Azure DevOps PAT from env or config
+ */
 export function getAzureDevOpsPAT(): string | null {
-  // Priority: env var > file
   if (process.env.AZURE_DEVOPS_PAT) {
     return process.env.AZURE_DEVOPS_PAT;
   }
   
-  const creds = getCredentials();
-  return creds.azure_devops_pat || null;
-}
-
-export function getCopilotToken(): { token: string; endpoint: string; expiresAt: number } | null {
-  const creds = getCredentials();
-  
-  if (!creds.copilot_token || !creds.copilot_endpoint || !creds.copilot_expires_at) {
-    return null;
-  }
-  
-  return {
-    token: creds.copilot_token,
-    endpoint: creds.copilot_endpoint,
-    expiresAt: creds.copilot_expires_at
-  };
-}
-
-export function saveCopilotToken(token: string, endpoint: string, expiresAt: number): void {
-  saveCredentials({
-    copilot_token: token,
-    copilot_endpoint: endpoint,
-    copilot_expires_at: expiresAt
-  });
+  const config = getConfig();
+  return config.azure_devops_pat || null;
 }
 
 export function getConfig(): Config {
@@ -124,10 +64,19 @@ export function saveConfig(config: Partial<Config>): void {
   
   fs.writeFileSync(
     CONFIG_FILE,
-    JSON.stringify(merged, null, 2)
+    JSON.stringify(merged, null, 2),
+    { mode: 0o600 }
   );
 }
 
 export function getConfigDir(): string {
   return CONFIG_DIR;
+}
+
+// Legacy compat - clear old credentials file if it exists
+export function clearCredentials(): void {
+  const credFile = path.join(CONFIG_DIR, 'credentials.json');
+  if (fs.existsSync(credFile)) {
+    fs.unlinkSync(credFile);
+  }
 }

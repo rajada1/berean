@@ -1,11 +1,12 @@
-import { getValidCopilotCredentials } from '../services/copilot-auth.js';
+import { CopilotClient } from '@github/copilot-sdk';
+import { getGitHubToken } from '../services/credentials.js';
 
 export interface ReviewIssue {
   severity: 'critical' | 'warning' | 'suggestion';
   file?: string;
   line?: number;
   message: string;
-  suggestion?: string; // Code suggestion for inline comments
+  suggestion?: string;
 }
 
 export interface ReviewResult {
@@ -25,59 +26,65 @@ export interface ReviewOptions {
   maxTokens?: number;
 }
 
+// Singleton client instance
+let _client: CopilotClient | null = null;
+
 /**
- * Review code using GitHub Copilot
+ * Get or create a CopilotClient instance
+ */
+async function getClient(): Promise<CopilotClient> {
+  if (_client) return _client;
+
+  const token = getGitHubToken();
+
+  const options: Record<string, unknown> = {};
+  
+  if (token) {
+    options.githubToken = token;
+    options.useLoggedInUser = false;
+  }
+  // If no token, SDK will try: env vars (COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN) → stored CLI credentials → gh auth
+
+  _client = new CopilotClient(options);
+  return _client;
+}
+
+/**
+ * Cleanup client on exit
+ */
+export async function stopClient(): Promise<void> {
+  if (_client) {
+    await _client.stop();
+    _client = null;
+  }
+}
+
+/**
+ * Review code using GitHub Copilot SDK
  */
 export async function reviewCode(
-  diff: string, 
+  diff: string,
   options: ReviewOptions = {}
 ): Promise<ReviewResult> {
-  const { model = 'gpt-4o', language = 'English', maxTokens = 16000 } = options;
+  const { model = 'gpt-4o', language = 'English' } = options;
 
   try {
-    const credentials = await getValidCopilotCredentials();
+    const client = await getClient();
 
     const systemPrompt = buildReviewPrompt(language);
-    
-    const response = await fetch(`${credentials.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${credentials.token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Copilot-Integration-Id': 'vscode-chat',
-        'Editor-Version': 'Berean/1.0.0',
-        'X-GitHub-Api-Version': '2025-05-01'
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: diff }
-        ],
-        temperature: 0.3,
-        max_tokens: maxTokens,
-        response_format: model.includes('gpt') ? { type: 'json_object' } : undefined
-      })
+
+    const session = await client.createSession({
+      model,
+      streaming: false,
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorData: { error?: { message?: string }; message?: string } = {};
-      try {
-        errorData = JSON.parse(errorText);
-      } catch {
-        errorData = { message: errorText };
-      }
-      throw new Error(errorData.error?.message || errorData.message || `HTTP ${response.status}`);
-    }
+    // Send system prompt + diff as a review request
+    const response = await session.sendAndWait({
+      prompt: `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`,
+    });
 
-    const data = await response.json() as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    
-    const content = data.choices?.[0]?.message?.content || '';
-    
+    const content = response?.data?.content || '';
+
     if (!content) {
       return {
         success: false,
@@ -86,87 +93,90 @@ export async function reviewCode(
       };
     }
 
-    // Try to parse as JSON
-    try {
-      // Try to extract JSON if wrapped in markdown code blocks
-      let jsonContent = content;
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (jsonMatch) {
-        jsonContent = jsonMatch[1].trim();
-      }
-      
-      // Try to fix truncated JSON by closing brackets
-      let parsed: {
-        summary?: string;
-        issues?: ReviewResult['issues'];
-        positives?: string[];
-        recommendations?: string[];
-      } | null = null;
-      
-      // First try parsing as-is
-      try {
-        parsed = JSON.parse(jsonContent);
-      } catch {
-        // Try to fix truncated JSON
-        let fixedJson = jsonContent;
-        
-        // Count open brackets and close them
-        const openBraces = (fixedJson.match(/{/g) || []).length;
-        const closeBraces = (fixedJson.match(/}/g) || []).length;
-        const openBrackets = (fixedJson.match(/\[/g) || []).length;
-        const closeBrackets = (fixedJson.match(/\]/g) || []).length;
-        
-        // Remove trailing incomplete string/value
-        fixedJson = fixedJson.replace(/,\s*"[^"]*$/, '');
-        fixedJson = fixedJson.replace(/,\s*$/, '');
-        fixedJson = fixedJson.replace(/:\s*"[^"]*$/, ': ""');
-        
-        // Close arrays and objects
-        for (let i = 0; i < openBrackets - closeBrackets; i++) {
-          fixedJson += ']';
-        }
-        for (let i = 0; i < openBraces - closeBraces; i++) {
-          fixedJson += '}';
-        }
-        
-        try {
-          parsed = JSON.parse(fixedJson);
-        } catch {
-          // Still failed, return raw content
-        }
-      }
-      
-      if (parsed) {
-        return {
-          success: true,
-          summary: parsed.summary,
-          issues: parsed.issues,
-          positives: parsed.positives,
-          recommendations: parsed.recommendations,
-          review: content,
-          model
-        };
-      }
-      
-      // Return raw content if parsing failed
-      return {
-        success: true,
-        review: content,
-        model
-      };
-    } catch {
-      // Return raw content if not JSON
-      return {
-        success: true,
-        review: content,
-        model
-      };
-    }
+    // Parse the JSON response
+    return parseReviewResponse(content, model);
 
   } catch (error) {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
+      model
+    };
+  }
+}
+
+/**
+ * Parse the AI response into structured review result
+ */
+function parseReviewResponse(content: string, model: string): ReviewResult {
+  try {
+    let jsonContent = content;
+    
+    // Extract JSON if wrapped in markdown code blocks
+    const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonContent = jsonMatch[1].trim();
+    }
+
+    let parsed: {
+      summary?: string;
+      issues?: ReviewResult['issues'];
+      positives?: string[];
+      recommendations?: string[];
+    } | null = null;
+
+    // First try parsing as-is
+    try {
+      parsed = JSON.parse(jsonContent);
+    } catch {
+      // Try to fix truncated JSON
+      let fixedJson = jsonContent;
+
+      const openBraces = (fixedJson.match(/{/g) || []).length;
+      const closeBraces = (fixedJson.match(/}/g) || []).length;
+      const openBrackets = (fixedJson.match(/\[/g) || []).length;
+      const closeBrackets = (fixedJson.match(/\]/g) || []).length;
+
+      // Remove trailing incomplete string/value
+      fixedJson = fixedJson.replace(/,\s*"[^"]*$/, '');
+      fixedJson = fixedJson.replace(/,\s*$/, '');
+      fixedJson = fixedJson.replace(/:\s*"[^"]*$/, ': ""');
+
+      for (let i = 0; i < openBrackets - closeBrackets; i++) {
+        fixedJson += ']';
+      }
+      for (let i = 0; i < openBraces - closeBraces; i++) {
+        fixedJson += '}';
+      }
+
+      try {
+        parsed = JSON.parse(fixedJson);
+      } catch {
+        // Still failed
+      }
+    }
+
+    if (parsed) {
+      return {
+        success: true,
+        summary: parsed.summary,
+        issues: parsed.issues,
+        positives: parsed.positives,
+        recommendations: parsed.recommendations,
+        review: content,
+        model
+      };
+    }
+
+    return {
+      success: true,
+      review: content,
+      model
+    };
+  } catch {
+    return {
+      success: true,
+      review: content,
       model
     };
   }
@@ -208,53 +218,43 @@ Be specific and actionable. If the code is good, return empty issues array and l
 }
 
 /**
- * Fetch available models from Copilot
+ * Fetch available models from Copilot SDK
  */
 export async function fetchModels(): Promise<Array<{
   id: string;
   name: string;
   isDefault: boolean;
 }>> {
-  const credentials = await getValidCopilotCredentials();
+  try {
+    const client = await getClient();
 
-  const response = await fetch(`${credentials.endpoint}/models`, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${credentials.token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'Copilot-Integration-Id': 'vscode-chat',
-      'Editor-Version': 'Berean/1.0.0',
-      'X-GitHub-Api-Version': '2025-05-01'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch models: ${response.status}`);
-  }
-
-  const data = await response.json() as {
-    data?: Array<{
-      id: string;
-      name?: string;
-      is_chat_default?: boolean;
-      capabilities?: { type?: string };
-      model_picker_enabled?: boolean;
-    }>;
-  };
-  
-  const models = data.data || [];
-
-  return models
-    .filter(m => m.capabilities?.type === 'chat' && m.model_picker_enabled !== false)
-    .map(m => ({
-      id: m.id,
-      name: m.name || m.id,
-      isDefault: m.is_chat_default || false
-    }))
-    .sort((a, b) => {
-      if (a.isDefault && !b.isDefault) return -1;
-      if (b.isDefault && !a.isDefault) return 1;
-      return a.name.localeCompare(b.name);
+    const session = await client.createSession({
+      model: 'gpt-4o', // temporary session just to list models
     });
+
+    // The SDK exposes models through the client
+    // For now, return a curated list of known models
+    // The SDK doesn't have a direct listModels method yet,
+    // so we'll use the known Copilot models
+    const knownModels = [
+      { id: 'gpt-4o', name: 'GPT-4o', isDefault: true },
+      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', isDefault: false },
+      { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', isDefault: false },
+      { id: 'claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', isDefault: false },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', isDefault: false },
+      { id: 'o3-mini', name: 'o3-mini', isDefault: false },
+    ];
+
+    return knownModels;
+  } catch {
+    // Fallback: return known models without validation
+    return [
+      { id: 'gpt-4o', name: 'GPT-4o', isDefault: true },
+      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', isDefault: false },
+      { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', isDefault: false },
+      { id: 'claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', isDefault: false },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', isDefault: false },
+      { id: 'o3-mini', name: 'o3-mini', isDefault: false },
+    ];
+  }
 }

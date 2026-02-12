@@ -1,6 +1,6 @@
 {
   "name": "berean",
-  "version": "0.1.0-beta",
+  "version": "0.2.0",
   "description": "AI-powered code review CLI for Azure DevOps PRs using GitHub Copilot",
   "main": "dist/index.js",
   "bin": {
@@ -24,8 +24,9 @@
   "author": "Matheus Oliveira",
   "license": "MIT",
   "dependencies": {
-    "commander": "^12.1.0",
+    "@github/copilot-sdk": "^0.1.22",
     "chalk": "^5.3.0",
+    "commander": "^12.1.0",
     "ora": "^8.0.1"
   },
   "devDependencies": {

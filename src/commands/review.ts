@@ -13,7 +13,7 @@ import {
   addReviewedCommitsTag,
   updatePRComment
 } from '../services/azure-devops.js';
-import { reviewCode, fetchModels, ReviewResult, ReviewIssue } from '../providers/github-copilot.js';
+import { reviewCode, fetchModels, stopClient, ReviewResult, ReviewIssue } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
 import { getAzureDevOpsPAT, getConfig } from '../services/credentials.js';
 

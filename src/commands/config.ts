@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { saveCredentials, getCredentials, saveConfig, getConfig, getConfigDir } from '../services/credentials.js';
+import { saveConfig, getConfig, getConfigDir, getAzureDevOpsPAT, getGitHubToken } from '../services/credentials.js';
 
 export const configCommand = new Command('config')
   .description('Manage configuration');
@@ -19,7 +19,7 @@ configCommand
 
     switch (key) {
       case 'azure-pat':
-        saveCredentials({ azure_devops_pat: value });
+        saveConfig({ azure_devops_pat: value });
         console.log(chalk.green('✓ Azure DevOps PAT saved.'));
         break;
       case 'default-model':
@@ -37,19 +37,20 @@ configCommand
   .command('get [key]')
   .description('Get configuration value(s)')
   .action((key?: string) => {
-    const creds = getCredentials();
     const config = getConfig();
 
     if (key) {
       switch (key) {
-        case 'azure-pat':
-          if (creds.azure_devops_pat) {
-            const masked = creds.azure_devops_pat.substring(0, 6) + '...' + creds.azure_devops_pat.slice(-4);
+        case 'azure-pat': {
+          const pat = getAzureDevOpsPAT();
+          if (pat) {
+            const masked = pat.substring(0, 6) + '...' + pat.slice(-4);
             console.log(chalk.white(`azure-pat: ${masked}`));
           } else {
             console.log(chalk.gray('azure-pat: (not set)'));
           }
           break;
+        }
         case 'default-model':
           console.log(chalk.white(`default-model: ${config.default_model || 'gpt-4o'}`));
           break;
@@ -66,17 +67,16 @@ configCommand
       console.log(chalk.white('  Config directory:'), chalk.gray(getConfigDir()));
       console.log();
       
-      // Credentials (masked)
-      const hasPat = !!creds.azure_devops_pat;
-      const hasOAuth = !!creds.github_oauth_token;
+      const hasPat = !!getAzureDevOpsPAT();
+      const hasToken = !!getGitHubToken();
       
       console.log(chalk.white('  azure-pat:'), hasPat 
         ? chalk.green('configured') 
         : chalk.yellow('not set'));
       
-      console.log(chalk.white('  github-auth:'), hasOAuth 
-        ? chalk.green('authenticated') 
-        : chalk.yellow('not authenticated'));
+      console.log(chalk.white('  github-auth:'), hasToken 
+        ? chalk.green('via environment variable') 
+        : chalk.yellow('using Copilot CLI'));
       
       console.log();
       console.log(chalk.white('  default-model:'), chalk.cyan(config.default_model || 'gpt-4o'));
