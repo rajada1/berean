@@ -75,13 +75,25 @@ export async function reviewCode(
     const systemPrompt = buildReviewPrompt(language, rules);
 
     console.error(`[berean] Creating session with model: ${model}`);
+    console.error(`[berean] Token source: ${getGitHubTokenFromAzure() ? 'env var' : 'SDK default'}`);
     const session = await client.createSession({
       model,
       streaming: false,
     });
     console.error(`[berean] Session created`);
 
-    const prompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
+    const fullPrompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
+    
+    // Truncate if prompt is too large (max ~100K chars ≈ 25K tokens)
+    const MAX_PROMPT_CHARS = 100_000;
+    let prompt = fullPrompt;
+    let truncated = false;
+    if (fullPrompt.length > MAX_PROMPT_CHARS) {
+      prompt = fullPrompt.substring(0, MAX_PROMPT_CHARS) + '\n\n[... diff truncated due to size limit ...]';
+      truncated = true;
+      console.error(`[berean] ⚠ Prompt truncated from ${fullPrompt.length} to ${MAX_PROMPT_CHARS} chars`);
+    }
+    
     const TIMEOUT_MS = 300_000; // 5 min
 
     // Use direct event capture instead of sendAndWait
