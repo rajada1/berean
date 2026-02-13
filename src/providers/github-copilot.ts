@@ -39,7 +39,7 @@ async function getClient(): Promise<CopilotClient> {
   const token = getGitHubTokenFromAzure();
 
   const options: Record<string, unknown> = {};
-  
+
   if (token) {
     options.githubToken = token;
     options.useLoggedInUser = false;
@@ -60,6 +60,9 @@ export async function stopClient(): Promise<void> {
   }
 }
 
+// Timeout for sendAndWait (5 minutes for large diffs with rules)
+const REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
+
 /**
  * Review code using GitHub Copilot SDK
  */
@@ -69,20 +72,25 @@ export async function reviewCode(
 ): Promise<ReviewResult> {
   const { model = 'gpt-4o', language = 'English', rules } = options;
 
+  let session: import('@github/copilot-sdk').CopilotSession | null = null;
+
   try {
     const client = await getClient();
 
     const systemPrompt = buildReviewPrompt(language, rules);
 
-    const session = await client.createSession({
+    session = await client.createSession({
       model,
       streaming: false,
     });
 
     // Send system prompt + diff as a review request
-    const response = await session.sendAndWait({
-      prompt: `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`,
-    });
+    const response = await session.sendAndWait(
+      {
+        prompt: `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`,
+      },
+      REVIEW_TIMEOUT_MS,
+    );
 
     const content = response?.data?.content || '';
 
@@ -98,11 +106,31 @@ export async function reviewCode(
     return parseReviewResponse(content, model);
 
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+
+    // Provide a more helpful message for stream/timeout errors
+    if (message.includes('stream was destroyed') || message.includes('timeout')) {
+      return {
+        success: false,
+        error: `Review timed out or connection was lost. The diff may be too large. Try with a smaller PR or increase timeout. (${message})`,
+        model
+      };
+    }
+
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: message,
       model
     };
+  } finally {
+    // Always cleanup the session
+    if (session) {
+      try {
+        await session.destroy();
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   }
 }
 
@@ -112,7 +140,7 @@ export async function reviewCode(
 function parseReviewResponse(content: string, model: string): ReviewResult {
   try {
     let jsonContent = content;
-    
+
     // Extract JSON if wrapped in markdown code blocks
     const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonMatch) {

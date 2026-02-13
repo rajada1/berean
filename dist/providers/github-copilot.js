@@ -27,22 +27,25 @@ export async function stopClient() {
         _client = null;
     }
 }
+// Timeout for sendAndWait (5 minutes for large diffs with rules)
+const REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
 /**
  * Review code using GitHub Copilot SDK
  */
 export async function reviewCode(diff, options = {}) {
     const { model = 'gpt-4o', language = 'English', rules } = options;
+    let session = null;
     try {
         const client = await getClient();
         const systemPrompt = buildReviewPrompt(language, rules);
-        const session = await client.createSession({
+        session = await client.createSession({
             model,
             streaming: false,
         });
         // Send system prompt + diff as a review request
         const response = await session.sendAndWait({
             prompt: `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`,
-        });
+        }, REVIEW_TIMEOUT_MS);
         const content = response?.data?.content || '';
         if (!content) {
             return {
@@ -55,11 +58,31 @@ export async function reviewCode(diff, options = {}) {
         return parseReviewResponse(content, model);
     }
     catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        // Provide a more helpful message for stream/timeout errors
+        if (message.includes('stream was destroyed') || message.includes('timeout')) {
+            return {
+                success: false,
+                error: `Review timed out or connection was lost. The diff may be too large. Try with a smaller PR or increase timeout. (${message})`,
+                model
+            };
+        }
         return {
             success: false,
-            error: error instanceof Error ? error.message : 'Unknown error',
+            error: message,
             model
         };
+    }
+    finally {
+        // Always cleanup the session
+        if (session) {
+            try {
+                await session.destroy();
+            }
+            catch {
+                // Ignore cleanup errors
+            }
+        }
     }
 }
 /**

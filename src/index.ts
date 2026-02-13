@@ -21,9 +21,26 @@ program.addCommand(configCommand);
 program.addCommand(updateCommand);
 program.addCommand(modelsCommand);
 
-// Cleanup on exit
-process.on('beforeExit', async () => {
+// Cleanup on exit - use SIGINT/SIGTERM since process.exit() skips beforeExit
+const cleanup = async () => {
   await stopClient();
+};
+
+process.on('beforeExit', cleanup);
+process.on('SIGINT', async () => {
+  await cleanup();
+  process.exit(130);
+});
+process.on('SIGTERM', async () => {
+  await cleanup();
+  process.exit(143);
 });
 
-program.parse();
+// Run and ensure cleanup on completion
+(async () => {
+  try {
+    await program.parseAsync();
+  } finally {
+    await cleanup();
+  }
+})();
