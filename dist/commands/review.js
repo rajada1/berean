@@ -4,7 +4,7 @@ import ora from 'ora';
 import * as fs from 'fs';
 import * as path from 'path';
 import { parsePRUrl, fetchPRDiff, postPRComment, postInlineComments, findBereanComments, getPRCommits, shouldIgnorePR, addReviewedCommitsTag, updatePRComment } from '../services/azure-devops.js';
-import { reviewCode, fetchModels } from '../providers/github-copilot.js';
+import { reviewCode, fetchModels, stopClient } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
 import { getAzureDevOpsPATFromPipeline, getDefaultModel, getDefaultLanguage, getRulesPath } from '../services/credentials.js';
 export const reviewCommand = new Command('review')
@@ -25,174 +25,179 @@ export const reviewCommand = new Command('review')
     .option('--force', 'Force review even if @berean: ignore is set')
     .option('--rules <path>', 'Path to project rules/guidelines file (or set BEREAN_RULES env)')
     .action(async (url, options) => {
-    // List models
-    if (options.listModels) {
-        await listModels();
-        return;
-    }
-    // Check authentication
-    if (!isAuthenticated()) {
-        console.log(chalk.red('✗ Not authenticated. Run: berean auth login'));
-        process.exit(1);
-    }
-    // Check Azure DevOps PAT
-    if (!getAzureDevOpsPATFromPipeline()) {
-        console.log(chalk.red('✗ Azure DevOps PAT not configured.'));
-        console.log(chalk.gray('  Set AZURE_DEVOPS_PAT environment variable or run:'));
-        console.log(chalk.gray('  berean config set azure-pat <your-pat>'));
-        process.exit(1);
-    }
-    // Parse PR info
-    let prInfo = null;
-    if (url) {
-        prInfo = parsePRUrl(url);
-        if (!prInfo) {
-            console.log(chalk.red('✗ Invalid Azure DevOps PR URL'));
-            console.log(chalk.gray('  Expected format: https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{id}'));
+    try {
+        // List models
+        if (options.listModels) {
+            await listModels();
+            return;
+        }
+        // Check authentication
+        if (!isAuthenticated()) {
+            console.log(chalk.red('✗ Not authenticated. Run: berean auth login'));
             process.exit(1);
         }
-    }
-    else if (options.org && options.project && options.repo && options.pr) {
-        prInfo = {
-            organization: options.org,
-            project: options.project,
-            repository: options.repo,
-            pullRequestId: parseInt(options.pr, 10)
-        };
-    }
-    else {
-        console.log(chalk.red('✗ Please provide a PR URL or use --org, --project, --repo, --pr flags'));
-        process.exit(1);
-    }
-    // Fetch PR diff first (we need description to check for ignore)
-    const diffSpinner = ora('Fetching PR diff...').start();
-    const diffResult = await fetchPRDiff(prInfo);
-    if (!diffResult.success || !diffResult.diff) {
-        diffSpinner.fail('Failed to fetch PR diff');
-        console.log(chalk.red(`  ${diffResult.error}`));
-        process.exit(1);
-    }
-    diffSpinner.succeed(`Fetched PR: ${diffResult.prDetails?.title || 'Unknown'}`);
-    // Check for @berean: ignore in PR description
-    if (!options.force && shouldIgnorePR(diffResult.prDetails?.description)) {
-        console.log(chalk.yellow('⏭️  Skipped: PR description contains @berean: ignore'));
-        console.log(chalk.gray('   Use --force to review anyway'));
-        process.exit(0);
-    }
-    // Check for existing Berean reviews and commits
-    let existingReview = null;
-    let reviewedCommits = [];
-    let allCommits = [];
-    let newCommits = [];
-    if (options.skipIfReviewed || options.incremental) {
-        const checkSpinner = ora('Checking for existing reviews...').start();
-        const [bereanComments, prCommits] = await Promise.all([
-            findBereanComments(prInfo),
-            getPRCommits(prInfo)
-        ]);
-        allCommits = prCommits;
-        if (bereanComments.length > 0) {
-            // Get the most recent Berean comment
-            existingReview = bereanComments[bereanComments.length - 1];
-            reviewedCommits = existingReview.reviewedCommits || [];
-            // Find commits that haven't been reviewed yet
-            newCommits = allCommits.filter(c => !reviewedCommits.includes(c));
-            if (options.skipIfReviewed && newCommits.length === 0) {
-                checkSpinner.succeed('PR already reviewed by Berean (no new commits)');
-                console.log(chalk.gray('   Use --force to review again'));
-                process.exit(0);
+        // Check Azure DevOps PAT
+        if (!getAzureDevOpsPATFromPipeline()) {
+            console.log(chalk.red('✗ Azure DevOps PAT not configured.'));
+            console.log(chalk.gray('  Set AZURE_DEVOPS_PAT environment variable or run:'));
+            console.log(chalk.gray('  berean config set azure-pat <your-pat>'));
+            process.exit(1);
+        }
+        // Parse PR info
+        let prInfo = null;
+        if (url) {
+            prInfo = parsePRUrl(url);
+            if (!prInfo) {
+                console.log(chalk.red('✗ Invalid Azure DevOps PR URL'));
+                console.log(chalk.gray('  Expected format: https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{id}'));
+                process.exit(1);
             }
-            if (options.incremental && newCommits.length === 0) {
-                checkSpinner.succeed('No new commits since last review');
-                process.exit(0);
-            }
-            if (newCommits.length > 0) {
-                checkSpinner.succeed(`Found ${newCommits.length} new commits since last review`);
+        }
+        else if (options.org && options.project && options.repo && options.pr) {
+            prInfo = {
+                organization: options.org,
+                project: options.project,
+                repository: options.repo,
+                pullRequestId: parseInt(options.pr, 10)
+            };
+        }
+        else {
+            console.log(chalk.red('✗ Please provide a PR URL or use --org, --project, --repo, --pr flags'));
+            process.exit(1);
+        }
+        // Fetch PR diff first (we need description to check for ignore)
+        const diffSpinner = ora('Fetching PR diff...').start();
+        const diffResult = await fetchPRDiff(prInfo);
+        if (!diffResult.success || !diffResult.diff) {
+            diffSpinner.fail('Failed to fetch PR diff');
+            console.log(chalk.red(`  ${diffResult.error}`));
+            process.exit(1);
+        }
+        diffSpinner.succeed(`Fetched PR: ${diffResult.prDetails?.title || 'Unknown'}`);
+        // Check for @berean: ignore in PR description
+        if (!options.force && shouldIgnorePR(diffResult.prDetails?.description)) {
+            console.log(chalk.yellow('⏭️  Skipped: PR description contains @berean: ignore'));
+            console.log(chalk.gray('   Use --force to review anyway'));
+            process.exit(0);
+        }
+        // Check for existing Berean reviews and commits
+        let existingReview = null;
+        let reviewedCommits = [];
+        let allCommits = [];
+        let newCommits = [];
+        if (options.skipIfReviewed || options.incremental) {
+            const checkSpinner = ora('Checking for existing reviews...').start();
+            const [bereanComments, prCommits] = await Promise.all([
+                findBereanComments(prInfo),
+                getPRCommits(prInfo)
+            ]);
+            allCommits = prCommits;
+            if (bereanComments.length > 0) {
+                // Get the most recent Berean comment
+                existingReview = bereanComments[bereanComments.length - 1];
+                reviewedCommits = existingReview.reviewedCommits || [];
+                // Find commits that haven't been reviewed yet
+                newCommits = allCommits.filter(c => !reviewedCommits.includes(c));
+                if (options.skipIfReviewed && newCommits.length === 0) {
+                    checkSpinner.succeed('PR already reviewed by Berean (no new commits)');
+                    console.log(chalk.gray('   Use --force to review again'));
+                    process.exit(0);
+                }
+                if (options.incremental && newCommits.length === 0) {
+                    checkSpinner.succeed('No new commits since last review');
+                    process.exit(0);
+                }
+                if (newCommits.length > 0) {
+                    checkSpinner.succeed(`Found ${newCommits.length} new commits since last review`);
+                }
+                else {
+                    checkSpinner.succeed('No previous Berean review found');
+                }
             }
             else {
                 checkSpinner.succeed('No previous Berean review found');
+                newCommits = allCommits;
             }
         }
         else {
-            checkSpinner.succeed('No previous Berean review found');
+            // Just get commits for tagging
+            allCommits = await getPRCommits(prInfo);
             newCommits = allCommits;
         }
-    }
-    else {
-        // Just get commits for tagging
-        allCommits = await getPRCommits(prInfo);
-        newCommits = allCommits;
-    }
-    // Get config for defaults
-    const language = options.language || getDefaultLanguage();
-    const model = options.model || getDefaultModel();
-    // Load project rules if specified
-    let rules;
-    const rulesPath = options.rules || getRulesPath();
-    if (rulesPath) {
-        const rulesSpinner = ora('Loading project rules...').start();
-        try {
-            // Support directory (read all files) or single file
-            const resolvedPath = path.resolve(rulesPath);
-            if (fs.existsSync(resolvedPath)) {
-                const stat = fs.statSync(resolvedPath);
-                if (stat.isDirectory()) {
-                    // Read all files in the directory
-                    const files = fs.readdirSync(resolvedPath)
-                        .filter(f => !f.startsWith('.'))
-                        .sort();
-                    const parts = [];
-                    for (const file of files) {
-                        const filePath = path.join(resolvedPath, file);
-                        const fileStat = fs.statSync(filePath);
-                        if (fileStat.isFile()) {
-                            const content = fs.readFileSync(filePath, 'utf-8');
-                            parts.push(`### ${file}\n\n${content}`);
+        // Get config for defaults
+        const language = options.language || getDefaultLanguage();
+        const model = options.model || getDefaultModel();
+        // Load project rules if specified
+        let rules;
+        const rulesPath = options.rules || getRulesPath();
+        if (rulesPath) {
+            const rulesSpinner = ora('Loading project rules...').start();
+            try {
+                // Support directory (read all files) or single file
+                const resolvedPath = path.resolve(rulesPath);
+                if (fs.existsSync(resolvedPath)) {
+                    const stat = fs.statSync(resolvedPath);
+                    if (stat.isDirectory()) {
+                        // Read all files in the directory
+                        const files = fs.readdirSync(resolvedPath)
+                            .filter(f => !f.startsWith('.'))
+                            .sort();
+                        const parts = [];
+                        for (const file of files) {
+                            const filePath = path.join(resolvedPath, file);
+                            const fileStat = fs.statSync(filePath);
+                            if (fileStat.isFile()) {
+                                const content = fs.readFileSync(filePath, 'utf-8');
+                                parts.push(`### ${file}\n\n${content}`);
+                            }
                         }
+                        rules = parts.join('\n\n---\n\n');
+                        rulesSpinner.succeed(`Loaded ${files.length} rules file(s) from ${rulesPath}`);
                     }
-                    rules = parts.join('\n\n---\n\n');
-                    rulesSpinner.succeed(`Loaded ${files.length} rules file(s) from ${rulesPath}`);
+                    else {
+                        rules = fs.readFileSync(resolvedPath, 'utf-8');
+                        rulesSpinner.succeed(`Loaded rules from ${rulesPath}`);
+                    }
                 }
                 else {
-                    rules = fs.readFileSync(resolvedPath, 'utf-8');
-                    rulesSpinner.succeed(`Loaded rules from ${rulesPath}`);
+                    rulesSpinner.warn(`Rules path not found: ${rulesPath} (continuing without rules)`);
                 }
             }
-            else {
-                rulesSpinner.warn(`Rules path not found: ${rulesPath} (continuing without rules)`);
+            catch (error) {
+                rulesSpinner.warn(`Failed to load rules: ${error instanceof Error ? error.message : 'Unknown error'} (continuing without rules)`);
             }
         }
-        catch (error) {
-            rulesSpinner.warn(`Failed to load rules: ${error instanceof Error ? error.message : 'Unknown error'} (continuing without rules)`);
+        // Review code
+        const reviewSpinner = ora(`Reviewing with ${model}...`).start();
+        const reviewResult = await reviewCode(diffResult.diff, {
+            model: model,
+            language: language,
+            rules: rules
+        });
+        if (!reviewResult.success) {
+            reviewSpinner.fail('Review failed');
+            console.log(chalk.red(`  ${reviewResult.error}`));
+            process.exit(1);
+        }
+        reviewSpinner.succeed('Review complete!');
+        // Post comment to PR if requested
+        if (options.postComment) {
+            await postGeneralComment(prInfo, reviewResult, allCommits, existingReview, options.incremental);
+        }
+        // Post inline comments if requested
+        if (options.inline) {
+            await postInlineIssues(prInfo, reviewResult);
+        }
+        // Output result
+        if (options.json) {
+            console.log(JSON.stringify(reviewResult, null, 2));
+        }
+        else {
+            printReviewToTerminal(reviewResult);
         }
     }
-    // Review code
-    const reviewSpinner = ora(`Reviewing with ${model}...`).start();
-    const reviewResult = await reviewCode(diffResult.diff, {
-        model: model,
-        language: language,
-        rules: rules
-    });
-    if (!reviewResult.success) {
-        reviewSpinner.fail('Review failed');
-        console.log(chalk.red(`  ${reviewResult.error}`));
-        process.exit(1);
-    }
-    reviewSpinner.succeed('Review complete!');
-    // Post comment to PR if requested
-    if (options.postComment) {
-        await postGeneralComment(prInfo, reviewResult, allCommits, existingReview, options.incremental);
-    }
-    // Post inline comments if requested
-    if (options.inline) {
-        await postInlineIssues(prInfo, reviewResult);
-    }
-    // Output result
-    if (options.json) {
-        console.log(JSON.stringify(reviewResult, null, 2));
-    }
-    else {
-        printReviewToTerminal(reviewResult);
+    finally {
+        await stopClient();
     }
 });
 async function postGeneralComment(prInfo, reviewResult, commitIds = [], existingReview = null, incremental = false) {

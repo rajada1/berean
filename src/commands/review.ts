@@ -37,6 +37,7 @@ export const reviewCommand = new Command('review')
   .option('--force', 'Force review even if @berean: ignore is set')
   .option('--rules <path>', 'Path to project rules/guidelines file (or set BEREAN_RULES env)')
   .action(async (url, options) => {
+    try {
     // List models
     if (options.listModels) {
       await listModels();
@@ -227,6 +228,10 @@ export const reviewCommand = new Command('review')
       console.log(JSON.stringify(reviewResult, null, 2));
     } else {
       printReviewToTerminal(reviewResult);
+    }
+
+    } finally {
+      await stopClient();
     }
   });
 
