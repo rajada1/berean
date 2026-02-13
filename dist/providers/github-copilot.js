@@ -166,38 +166,54 @@ Be specific and actionable. If the code is good, return empty issues array and l
     return prompt;
 }
 /**
- * Fetch available models from Copilot SDK
+ * Fetch available models from Copilot SDK (real API call)
+ * Falls back to a hardcoded list if the API call fails
  */
 export async function fetchModels() {
     try {
         const client = await getClient();
-        const session = await client.createSession({
-            model: 'gpt-4o', // temporary session just to list models
+        await client.start();
+        const models = await client.listModels();
+        return models.map((m) => {
+            // The SDK types are narrower than the actual API response
+            // Use type assertion to access extended fields
+            const caps = m.capabilities;
+            const limits = (caps?.limits ?? {});
+            const supports = (caps?.supports ?? {});
+            const billing = (m.billing ?? {});
+            return {
+                id: m.id,
+                name: m.name,
+                isDefault: m.id === 'gpt-4o',
+                isPremium: billing.is_premium ?? false,
+                multiplier: m.billing?.multiplier ?? 0,
+                maxContextTokens: limits.max_context_window_tokens,
+                maxOutputTokens: limits.max_output_tokens,
+                supportsVision: m.capabilities?.supports?.vision ?? false,
+                supportsToolCalls: supports.tool_calls ?? false,
+                supportsStreaming: supports.streaming ?? false,
+                supportsReasoning: m.capabilities?.supports?.reasoningEffort ?? false,
+                reasoningEfforts: m.supportedReasoningEfforts,
+                defaultReasoningEffort: m.defaultReasoningEffort,
+                policyState: m.policy?.state,
+            };
         });
-        // The SDK exposes models through the client
-        // For now, return a curated list of known models
-        // The SDK doesn't have a direct listModels method yet,
-        // so we'll use the known Copilot models
-        const knownModels = [
-            { id: 'gpt-4o', name: 'GPT-4o', isDefault: true },
-            { id: 'gpt-4o-mini', name: 'GPT-4o Mini', isDefault: false },
-            { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', isDefault: false },
-            { id: 'claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', isDefault: false },
-            { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', isDefault: false },
-            { id: 'o3-mini', name: 'o3-mini', isDefault: false },
-        ];
-        return knownModels;
     }
     catch {
-        // Fallback: return known models without validation
-        return [
-            { id: 'gpt-4o', name: 'GPT-4o', isDefault: true },
-            { id: 'gpt-4o-mini', name: 'GPT-4o Mini', isDefault: false },
-            { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', isDefault: false },
-            { id: 'claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', isDefault: false },
-            { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', isDefault: false },
-            { id: 'o3-mini', name: 'o3-mini', isDefault: false },
-        ];
+        // Fallback: return known models when API is unavailable
+        // (e.g., classic PAT tokens don't support models.list)
+        return FALLBACK_MODELS;
     }
 }
+const FALLBACK_MODELS = [
+    { id: 'gpt-4o', name: 'GPT-4o', isDefault: true },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', isDefault: false },
+    { id: 'gpt-4.1', name: 'GPT-4.1', isDefault: false },
+    { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', isDefault: false },
+    { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', isDefault: false },
+    { id: 'claude-sonnet-4.5', name: 'Claude Sonnet 4.5', isDefault: false },
+    { id: 'claude-haiku-4.5', name: 'Claude Haiku 4.5', isDefault: false },
+    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro (Preview)', isDefault: false },
+    { id: 'o3-mini', name: 'o3-mini', isDefault: false },
+];
 //# sourceMappingURL=github-copilot.js.map

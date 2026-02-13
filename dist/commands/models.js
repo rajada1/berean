@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import { createInterface } from 'readline';
-import { fetchModels } from '../providers/github-copilot.js';
+import { fetchModels, stopClient } from '../providers/github-copilot.js';
 import { isAuthenticated } from '../services/copilot-auth.js';
 import { getDefaultModel, getDefaultModelSource, saveConfig } from '../services/credentials.js';
 export const modelsCommand = new Command('models')
@@ -23,9 +23,31 @@ modelsCommand
         for (const model of models) {
             const isCurrent = model.id === currentModel;
             const marker = isCurrent ? chalk.green(' ✓ (current)') : '';
-            console.log(`  ${chalk.cyan(model.id)}${marker}`);
+            const premium = model.isPremium ? chalk.yellow(' ★') : '';
+            console.log(`  ${chalk.cyan(model.id)}${marker}${premium}`);
             if (model.name !== model.id) {
                 console.log(chalk.gray(`    ${model.name}`));
+            }
+            const details = [];
+            if (model.maxContextTokens) {
+                details.push(`ctx: ${(model.maxContextTokens / 1000).toFixed(0)}k`);
+            }
+            if (model.maxOutputTokens) {
+                details.push(`out: ${(model.maxOutputTokens / 1000).toFixed(0)}k`);
+            }
+            if (model.supportsVision)
+                details.push('vision');
+            if (model.supportsReasoning && model.reasoningEfforts) {
+                details.push(`reasoning: ${model.reasoningEfforts.join('/')}`);
+            }
+            if (model.multiplier !== undefined && model.multiplier > 0) {
+                details.push(`${model.multiplier}x`);
+            }
+            if (model.policyState && model.policyState !== 'enabled') {
+                details.push(chalk.red(model.policyState));
+            }
+            if (details.length > 0) {
+                console.log(chalk.gray(`    ${details.join(' · ')}`));
             }
         }
         console.log();
@@ -37,6 +59,9 @@ modelsCommand
         spinner.fail('Failed to fetch models');
         console.log(chalk.red(`  ${error instanceof Error ? error.message : 'Unknown error'}`));
         process.exit(1);
+    }
+    finally {
+        await stopClient();
     }
 });
 modelsCommand
@@ -65,6 +90,9 @@ modelsCommand
         console.log(chalk.red(`  ${error instanceof Error ? error.message : 'Unknown error'}`));
         process.exit(1);
     }
+    finally {
+        await stopClient();
+    }
 });
 modelsCommand
     .command('select')
@@ -83,7 +111,8 @@ modelsCommand
         models.forEach((model, index) => {
             const isCurrent = model.id === currentModel;
             const marker = isCurrent ? chalk.green(' (current)') : '';
-            console.log(`  ${chalk.yellow(`${index + 1})`)} ${chalk.cyan(model.id)}${marker}`);
+            const premium = model.isPremium ? chalk.yellow(' ★') : '';
+            console.log(`  ${chalk.yellow(`${index + 1})`)} ${chalk.cyan(model.id)}${marker}${premium}`);
             if (model.name !== model.id) {
                 console.log(chalk.gray(`      ${model.name}`));
             }
@@ -110,6 +139,9 @@ modelsCommand
         spinner.fail('Failed to fetch models');
         console.log(chalk.red(`  ${error instanceof Error ? error.message : 'Unknown error'}`));
         process.exit(1);
+    }
+    finally {
+        await stopClient();
     }
 });
 modelsCommand

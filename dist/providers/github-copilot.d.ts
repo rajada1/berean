@@ -29,12 +29,25 @@ export declare function stopClient(): Promise<void>;
  * Review code using GitHub Copilot SDK
  */
 export declare function reviewCode(diff: string, options?: ReviewOptions): Promise<ReviewResult>;
-/**
- * Fetch available models from Copilot SDK
- */
-export declare function fetchModels(): Promise<Array<{
+export interface ModelDetail {
     id: string;
     name: string;
     isDefault: boolean;
-}>>;
+    isPremium?: boolean;
+    multiplier?: number;
+    maxContextTokens?: number;
+    maxOutputTokens?: number;
+    supportsVision?: boolean;
+    supportsToolCalls?: boolean;
+    supportsStreaming?: boolean;
+    supportsReasoning?: boolean;
+    reasoningEfforts?: string[];
+    defaultReasoningEffort?: string;
+    policyState?: string;
+}
+/**
+ * Fetch available models from Copilot SDK (real API call)
+ * Falls back to a hardcoded list if the API call fails
+ */
+export declare function fetchModels(): Promise<ModelDetail[]>;
 //# sourceMappingURL=github-copilot.d.ts.map
