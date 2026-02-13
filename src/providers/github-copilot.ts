@@ -99,7 +99,7 @@ export async function reviewCode(
     }
 
     let content = '';
-    const TIMEOUT_MS = 180_000; // 3 min
+    const TIMEOUT_MS = 300_000; // 5 min
 
     if (sdkWorks) {
       // SDK works — use it for the real review

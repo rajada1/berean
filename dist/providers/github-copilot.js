@@ -58,7 +58,7 @@ export async function reviewCode(diff, options = {}) {
             console.error(`[berean] ✗ SDK failed: ${testErr instanceof Error ? testErr.message : testErr}`);
         }
         let content = '';
-        const TIMEOUT_MS = 180_000; // 3 min
+        const TIMEOUT_MS = 300_000; // 5 min
         if (sdkWorks) {
             // SDK works — use it for the real review
             console.error(`[berean] Using SDK for review...`);
