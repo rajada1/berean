@@ -19,7 +19,12 @@
 ## Instalação
 
 ```bash
-npm install -g github:rajada1/berean
+# Clone e link (recomendado)
+git clone https://github.com/rajada1/berean.git ~/.berean-cli
+cd ~/.berean-cli && npm install && npm link
+
+# Ou use o script de instalação
+curl -fsSL https://raw.githubusercontent.com/rajada1/berean/main/install.sh | bash
 ```
 
 **Pré-requisito:** GitHub Copilot CLI
@@ -28,7 +33,7 @@ npm install -g github:rajada1/berean
 npm install -g @github/copilot
 ```
 
-> **Nota:** Este é um pacote privado — não publicado no npm. Instale diretamente do GitHub.
+> **Nota:** Este é um pacote privado — não publicado no npm. Instale via clone + link.
 
 ## Início Rápido
 
@@ -257,7 +262,9 @@ steps:
       versionSpec: '18.x'
 
   - script: |
-      npm install -g @github/copilot github:rajada1/berean
+      npm install -g @github/copilot
+      git clone https://github.com/rajada1/berean.git /tmp/berean
+      cd /tmp/berean && npm install && npm link
     displayName: 'Instalar Copilot CLI e Berean'
 
   - script: |
@@ -328,7 +335,9 @@ jobs:
         with:
           node-version: '18'
 
-      - run: npm install -g @github/copilot github:rajada1/berean
+      - run: npm install -g @github/copilot
+      git clone https://github.com/rajada1/berean.git /tmp/berean
+      cd /tmp/berean && npm install && npm link
 
       - name: Executar AI Review
         run: berean review "${{ inputs.pr_url }}" --post-comment --inline
