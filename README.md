@@ -21,7 +21,7 @@ AI-powered code review CLI for Azure DevOps Pull Requests using GitHub Copilot S
 ## Installation
 
 ```bash
-npm install -g berean
+npm install -g github:rajada1/berean
 ```
 
 **Prerequisite:** GitHub Copilot CLI
@@ -29,6 +29,8 @@ npm install -g berean
 ```bash
 npm install -g @github/copilot
 ```
+
+> **Note:** This is a private package — not published to npm. Install directly from GitHub.
 
 ## Quick Start
 
@@ -114,7 +116,7 @@ steps:
       versionSpec: '18.x'
 
   - script: |
-      npm install -g @github/copilot berean
+      npm install -g @github/copilot github:rajada1/berean
     displayName: 'Install Copilot CLI and Berean'
 
   - script: |
@@ -181,7 +183,7 @@ jobs:
         with:
           node-version: '18'
 
-      - run: npm install -g @github/copilot berean
+      - run: npm install -g @github/copilot github:rajada1/berean
 
       - name: Run AI Review
         run: berean review "${{ inputs.pr_url }}" --post-comment --inline
