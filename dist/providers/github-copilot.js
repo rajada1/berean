@@ -37,21 +37,28 @@ export async function reviewCode(diff, options = {}) {
         const systemPrompt = buildReviewPrompt(language, rules);
         console.error(`[berean] Creating session with model: ${model}`);
         console.error(`[berean] Token source: ${getGitHubTokenFromAzure() ? 'env var' : 'SDK default'}`);
+        console.error(`[berean] Node version: ${process.version}`);
+        // Ensure client is started before creating session
+        console.error(`[berean] Starting client...`);
+        await client.start();
+        console.error(`[berean] Client started`);
+        // Quick connectivity test with a tiny prompt
+        console.error(`[berean] Testing connectivity...`);
+        const testSession = await client.createSession({ model, streaming: false });
+        try {
+            const testResponse = await testSession.sendAndWait({ prompt: 'Reply with just: OK' }, 30_000);
+            console.error(`[berean] Connectivity test passed: ${testResponse?.data?.content?.substring(0, 20)}`);
+        }
+        catch (testErr) {
+            console.error(`[berean] ⚠ Connectivity test failed: ${testErr instanceof Error ? testErr.message : testErr}`);
+        }
         const session = await client.createSession({
             model,
             streaming: false,
         });
-        console.error(`[berean] Session created`);
-        const fullPrompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
-        // Truncate if prompt is too large (max ~100K chars ≈ 25K tokens)
-        const MAX_PROMPT_CHARS = 100_000;
-        let prompt = fullPrompt;
-        let truncated = false;
-        if (fullPrompt.length > MAX_PROMPT_CHARS) {
-            prompt = fullPrompt.substring(0, MAX_PROMPT_CHARS) + '\n\n[... diff truncated due to size limit ...]';
-            truncated = true;
-            console.error(`[berean] ⚠ Prompt truncated from ${fullPrompt.length} to ${MAX_PROMPT_CHARS} chars`);
-        }
+        console.error(`[berean] Review session created`);
+        const prompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
+        console.error(`[berean] Prompt size: ${prompt.length} chars (~${Math.round(prompt.length / 4)} tokens)`);
         const TIMEOUT_MS = 300_000; // 5 min
         // Use direct event capture instead of sendAndWait
         // sendAndWait depends on session.idle which doesn't fire in some CI environments
