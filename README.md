@@ -118,7 +118,7 @@ pool:
 steps:
   - task: NodeTool@0
     inputs:
-      versionSpec: '18.x'
+      versionSpec: '22.x'
 
   - script: |
       npm install -g @github/copilot
@@ -188,7 +188,7 @@ jobs:
     steps:
       - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '22'
 
       - run: |
           npm install -g @github/copilot
