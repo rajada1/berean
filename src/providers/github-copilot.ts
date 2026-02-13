@@ -79,12 +79,81 @@ export async function reviewCode(
       streaming: false,
     });
 
-    // Send system prompt + diff as a review request (5 min timeout for large PRs)
-    const response = await session.sendAndWait({
-      prompt: `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`,
-    }, 300_000);
+    const prompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
+    const TIMEOUT_MS = 300_000; // 5 min
 
-    const content = response?.data?.content || '';
+    // Try sendAndWait first, fall back to capturing assistant.message directly
+    let content = '';
+    
+    try {
+      const response = await session.sendAndWait({ prompt }, TIMEOUT_MS);
+      content = response?.data?.content || '';
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      
+      // If timeout waiting for session.idle, try capturing assistant.message directly
+      if (errMsg.includes('Timeout') && errMsg.includes('session.idle')) {
+        console.error(`[debug] sendAndWait timed out — session.idle never received.`);
+        console.error(`[debug] Retrying with direct event capture (waiting for assistant.message)...`);
+        
+        // Create a new session for retry
+        const retrySession = await client.createSession({ model, streaming: false });
+        
+        content = await new Promise<string>((resolve, reject) => {
+          let result = '';
+          let gotMessage = false;
+          
+          const timeoutId = setTimeout(() => {
+            if (gotMessage && result) {
+              // Got a message but no idle — use what we have
+              console.error(`[debug] Timeout but got assistant.message, using partial result`);
+              unsubscribe();
+              resolve(result);
+            } else {
+              unsubscribe();
+              reject(new Error(`No response received after ${TIMEOUT_MS}ms`));
+            }
+          }, TIMEOUT_MS);
+
+          const unsubscribe = retrySession.on((event: Record<string, unknown>) => {
+            const eventType = event.type as string;
+            console.error(`[debug] Event: ${eventType}`);
+            
+            if (eventType === 'assistant.message') {
+              const data = event.data as Record<string, unknown>;
+              result = (data?.content as string) || result;
+              gotMessage = true;
+              
+              // Wait a bit for session.idle, but resolve after 10s of no new events
+              clearTimeout(timeoutId);
+              setTimeout(() => {
+                if (result) {
+                  unsubscribe();
+                  resolve(result);
+                }
+              }, 10_000);
+            } else if (eventType === 'session.idle') {
+              clearTimeout(timeoutId);
+              unsubscribe();
+              resolve(result);
+            } else if (eventType === 'session.error') {
+              clearTimeout(timeoutId);
+              unsubscribe();
+              const data = event.data as Record<string, string>;
+              reject(new Error(data?.message || 'Session error'));
+            }
+          });
+
+          retrySession.send({ prompt }).catch((e: Error) => {
+            clearTimeout(timeoutId);
+            unsubscribe();
+            reject(e);
+          });
+        });
+      } else {
+        throw err;
+      }
+    }
 
     if (!content) {
       return {
