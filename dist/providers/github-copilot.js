@@ -35,80 +35,83 @@ export async function reviewCode(diff, options = {}) {
     try {
         const client = await getClient();
         const systemPrompt = buildReviewPrompt(language, rules);
+        console.error(`[berean] Creating session with model: ${model}`);
         const session = await client.createSession({
             model,
             streaming: false,
         });
+        console.error(`[berean] Session created`);
         const prompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
         const TIMEOUT_MS = 300_000; // 5 min
-        // Try sendAndWait first, fall back to capturing assistant.message directly
-        let content = '';
-        try {
-            const response = await session.sendAndWait({ prompt }, TIMEOUT_MS);
-            content = response?.data?.content || '';
-        }
-        catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            // If timeout waiting for session.idle, try capturing assistant.message directly
-            if (errMsg.includes('Timeout') && errMsg.includes('session.idle')) {
-                console.error(`[debug] sendAndWait timed out — session.idle never received.`);
-                console.error(`[debug] Retrying with direct event capture (waiting for assistant.message)...`);
-                // Create a new session for retry
-                const retrySession = await client.createSession({ model, streaming: false });
-                content = await new Promise((resolve, reject) => {
-                    let result = '';
-                    let gotMessage = false;
-                    const timeoutId = setTimeout(() => {
-                        if (gotMessage && result) {
-                            // Got a message but no idle — use what we have
-                            console.error(`[debug] Timeout but got assistant.message, using partial result`);
-                            unsubscribe();
-                            resolve(result);
-                        }
-                        else {
-                            unsubscribe();
-                            reject(new Error(`No response received after ${TIMEOUT_MS}ms`));
-                        }
-                    }, TIMEOUT_MS);
-                    const unsubscribe = retrySession.on((event) => {
-                        const eventType = event.type;
-                        console.error(`[debug] Event: ${eventType}`);
-                        if (eventType === 'assistant.message') {
-                            const data = event.data;
-                            result = data?.content || result;
-                            gotMessage = true;
-                            // Wait a bit for session.idle, but resolve after 10s of no new events
-                            clearTimeout(timeoutId);
-                            setTimeout(() => {
-                                if (result) {
-                                    unsubscribe();
-                                    resolve(result);
-                                }
-                            }, 10_000);
-                        }
-                        else if (eventType === 'session.idle') {
-                            clearTimeout(timeoutId);
-                            unsubscribe();
-                            resolve(result);
-                        }
-                        else if (eventType === 'session.error') {
-                            clearTimeout(timeoutId);
-                            unsubscribe();
-                            const data = event.data;
-                            reject(new Error(data?.message || 'Session error'));
-                        }
-                    });
-                    retrySession.send({ prompt }).catch((e) => {
+        // Use direct event capture instead of sendAndWait
+        // sendAndWait depends on session.idle which doesn't fire in some CI environments
+        const content = await new Promise((resolve, reject) => {
+            let result = '';
+            let gotMessage = false;
+            let settleTimer = null;
+            const timeoutId = setTimeout(() => {
+                unsubscribe();
+                if (gotMessage && result) {
+                    console.error(`[berean] Timeout reached but got response, using it`);
+                    resolve(result);
+                }
+                else {
+                    reject(new Error(`No response received after ${TIMEOUT_MS / 1000}s`));
+                }
+            }, TIMEOUT_MS);
+            const settle = () => {
+                if (settleTimer)
+                    clearTimeout(settleTimer);
+                // Wait 5s after last event to make sure response is complete
+                settleTimer = setTimeout(() => {
+                    if (result) {
                         clearTimeout(timeoutId);
                         unsubscribe();
-                        reject(e);
-                    });
-                });
-            }
-            else {
-                throw err;
-            }
-        }
+                        console.error(`[berean] Response settled (no new events for 5s)`);
+                        resolve(result);
+                    }
+                }, 5_000);
+            };
+            const unsubscribe = session.on((event) => {
+                const eventType = event.type;
+                console.error(`[berean] Event: ${eventType}`);
+                if (eventType === 'assistant.message') {
+                    const data = event.data;
+                    result = data?.content || result;
+                    gotMessage = true;
+                    settle();
+                }
+                else if (eventType === 'session.idle') {
+                    if (settleTimer)
+                        clearTimeout(settleTimer);
+                    clearTimeout(timeoutId);
+                    unsubscribe();
+                    console.error(`[berean] session.idle received`);
+                    resolve(result);
+                }
+                else if (eventType === 'session.error') {
+                    if (settleTimer)
+                        clearTimeout(settleTimer);
+                    clearTimeout(timeoutId);
+                    unsubscribe();
+                    const data = event.data;
+                    reject(new Error(data?.message || 'Session error'));
+                }
+                else {
+                    // Other events — reset settle timer
+                    if (gotMessage)
+                        settle();
+                }
+            });
+            console.error(`[berean] Sending prompt (${prompt.length} chars)...`);
+            session.send({ prompt }).catch((e) => {
+                if (settleTimer)
+                    clearTimeout(settleTimer);
+                clearTimeout(timeoutId);
+                unsubscribe();
+                reject(e);
+            });
+        });
         if (!content) {
             return {
                 success: false,
