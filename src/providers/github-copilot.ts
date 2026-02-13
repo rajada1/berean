@@ -1,5 +1,6 @@
 import { CopilotClient } from '@github/copilot-sdk';
 import { getGitHubTokenFromAzure } from '../services/credentials.js';
+import { chatCompletion } from './copilot-http.js';
 
 export interface ReviewIssue {
   severity: 'critical' | 'warning' | 'suggestion';
@@ -105,7 +106,7 @@ export async function reviewCode(
 
     // Use direct event capture instead of sendAndWait
     // sendAndWait depends on session.idle which doesn't fire in some CI environments
-    const content = await new Promise<string>((resolve, reject) => {
+    let content = await new Promise<string>((resolve, reject) => {
       let result = '';
       let gotMessage = false;
       let settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,6 +171,15 @@ export async function reviewCode(
     });
 
     if (!content) {
+      // SDK returned empty — try direct HTTP as fallback
+      const token = getGitHubTokenFromAzure();
+      if (token) {
+        console.error(`[berean] SDK returned empty, trying direct HTTP API...`);
+        content = await chatCompletion(token, model, prompt, TIMEOUT_MS);
+      }
+    }
+
+    if (!content) {
       return {
         success: false,
         error: 'Empty response from API',
@@ -181,9 +191,28 @@ export async function reviewCode(
     return parseReviewResponse(content, model);
 
   } catch (error) {
+    // If SDK fails completely, try direct HTTP fallback
+    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+    const token = getGitHubTokenFromAzure();
+    
+    if (token && (errMsg.includes('Timeout') || errMsg.includes('No response') || errMsg.includes('session.idle'))) {
+      console.error(`[berean] SDK failed (${errMsg}), falling back to direct HTTP API...`);
+      try {
+        const systemPromptFallback = buildReviewPrompt(language, rules);
+        const promptFallback = `${systemPromptFallback}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
+        const content = await chatCompletion(token, model, promptFallback, 300_000);
+        
+        if (content) {
+          return parseReviewResponse(content, model);
+        }
+      } catch (httpError) {
+        console.error(`[berean] HTTP fallback also failed: ${httpError instanceof Error ? httpError.message : httpError}`);
+      }
+    }
+    
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: errMsg,
       model
     };
   }
