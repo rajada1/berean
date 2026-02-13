@@ -39,10 +39,10 @@ export async function reviewCode(diff, options = {}) {
             model,
             streaming: false,
         });
-        // Send system prompt + diff as a review request
+        // Send system prompt + diff as a review request (5 min timeout for large PRs)
         const response = await session.sendAndWait({
             prompt: `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`,
-        });
+        }, 300_000);
         const content = response?.data?.content || '';
         if (!content) {
             return {
