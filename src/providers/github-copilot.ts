@@ -74,101 +74,108 @@ export async function reviewCode(
     const client = await getClient();
 
     const systemPrompt = buildReviewPrompt(language, rules);
+    const prompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
 
-    console.error(`[berean] Creating session with model: ${model}`);
     console.error(`[berean] Token source: ${getGitHubTokenFromAzure() ? 'env var' : 'SDK default'}`);
     console.error(`[berean] Node version: ${process.version}`);
+    console.error(`[berean] Prompt size: ${prompt.length} chars (~${Math.round(prompt.length / 4)} tokens)`);
     
-    // Ensure client is started before creating session
+    // Quick connectivity test via SDK (30s) — if it fails, go straight to HTTP
     console.error(`[berean] Starting client...`);
     await client.start();
-    console.error(`[berean] Client started`);
+    console.error(`[berean] Client started, testing SDK connectivity...`);
     
-    // Quick connectivity test with a tiny prompt
-    console.error(`[berean] Testing connectivity...`);
+    let sdkWorks = false;
     const testSession = await client.createSession({ model, streaming: false });
     try {
       const testResponse = await testSession.sendAndWait({ prompt: 'Reply with just: OK' }, 30_000);
-      console.error(`[berean] Connectivity test passed: ${testResponse?.data?.content?.substring(0, 20)}`);
+      const testContent = testResponse?.data?.content || '';
+      if (testContent) {
+        sdkWorks = true;
+        console.error(`[berean] ✓ SDK works (test response: ${testContent.substring(0, 20)})`);
+      }
     } catch (testErr) {
-      console.error(`[berean] ⚠ Connectivity test failed: ${testErr instanceof Error ? testErr.message : testErr}`);
+      console.error(`[berean] ✗ SDK failed: ${testErr instanceof Error ? testErr.message : testErr}`);
     }
-    
-    const session = await client.createSession({
-      model,
-      streaming: false,
-    });
-    console.error(`[berean] Review session created`);
 
-    const prompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
-    console.error(`[berean] Prompt size: ${prompt.length} chars (~${Math.round(prompt.length / 4)} tokens)`);
-    const TIMEOUT_MS = 300_000; // 5 min
+    let content = '';
+    const TIMEOUT_MS = 180_000; // 3 min
 
-    // Use direct event capture instead of sendAndWait
-    // sendAndWait depends on session.idle which doesn't fire in some CI environments
-    let content = await new Promise<string>((resolve, reject) => {
-      let result = '';
-      let gotMessage = false;
-      let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    if (sdkWorks) {
+      // SDK works — use it for the real review
+      console.error(`[berean] Using SDK for review...`);
+      const session = await client.createSession({ model, streaming: false });
 
-      const timeoutId = setTimeout(() => {
-        unsubscribe();
-        if (gotMessage && result) {
-          console.error(`[berean] Timeout reached but got response, using it`);
-          resolve(result);
-        } else {
-          reject(new Error(`No response received after ${TIMEOUT_MS / 1000}s`));
-        }
-      }, TIMEOUT_MS);
+      content = await new Promise<string>((resolve, reject) => {
+        let result = '';
+        let gotMessage = false;
+        let settleTimer: ReturnType<typeof setTimeout> | null = null;
 
-      const settle = () => {
-        if (settleTimer) clearTimeout(settleTimer);
-        // Wait 5s after last event to make sure response is complete
-        settleTimer = setTimeout(() => {
-          if (result) {
+        const timeoutId = setTimeout(() => {
+          unsubscribe();
+          if (gotMessage && result) {
+            console.error(`[berean] Timeout reached but got response, using it`);
+            resolve(result);
+          } else {
+            reject(new Error(`No response received after ${TIMEOUT_MS / 1000}s`));
+          }
+        }, TIMEOUT_MS);
+
+        const settle = () => {
+          if (settleTimer) clearTimeout(settleTimer);
+          settleTimer = setTimeout(() => {
+            if (result) {
+              clearTimeout(timeoutId);
+              unsubscribe();
+              console.error(`[berean] Response settled (no new events for 5s)`);
+              resolve(result);
+            }
+          }, 5_000);
+        };
+
+        const unsubscribe = session.on((event: Record<string, unknown>) => {
+          const eventType = event.type as string;
+          console.error(`[berean] Event: ${eventType}`);
+
+          if (eventType === 'assistant.message') {
+            const data = event.data as Record<string, unknown>;
+            result = (data?.content as string) || result;
+            gotMessage = true;
+            settle();
+          } else if (eventType === 'session.idle') {
+            if (settleTimer) clearTimeout(settleTimer);
             clearTimeout(timeoutId);
             unsubscribe();
-            console.error(`[berean] Response settled (no new events for 5s)`);
+            console.error(`[berean] session.idle received`);
             resolve(result);
+          } else if (eventType === 'session.error') {
+            if (settleTimer) clearTimeout(settleTimer);
+            clearTimeout(timeoutId);
+            unsubscribe();
+            const data = event.data as Record<string, string>;
+            reject(new Error(data?.message || 'Session error'));
+          } else {
+            if (gotMessage) settle();
           }
-        }, 5_000);
-      };
+        });
 
-      const unsubscribe = session.on((event: Record<string, unknown>) => {
-        const eventType = event.type as string;
-        console.error(`[berean] Event: ${eventType}`);
-
-        if (eventType === 'assistant.message') {
-          const data = event.data as Record<string, unknown>;
-          result = (data?.content as string) || result;
-          gotMessage = true;
-          settle();
-        } else if (eventType === 'session.idle') {
+        console.error(`[berean] Sending prompt (${prompt.length} chars)...`);
+        session.send({ prompt }).catch((e: Error) => {
           if (settleTimer) clearTimeout(settleTimer);
           clearTimeout(timeoutId);
           unsubscribe();
-          console.error(`[berean] session.idle received`);
-          resolve(result);
-        } else if (eventType === 'session.error') {
-          if (settleTimer) clearTimeout(settleTimer);
-          clearTimeout(timeoutId);
-          unsubscribe();
-          const data = event.data as Record<string, string>;
-          reject(new Error(data?.message || 'Session error'));
-        } else {
-          // Other events — reset settle timer
-          if (gotMessage) settle();
-        }
+          reject(e);
+        });
       });
-
-      console.error(`[berean] Sending prompt (${prompt.length} chars)...`);
-      session.send({ prompt }).catch((e: Error) => {
-        if (settleTimer) clearTimeout(settleTimer);
-        clearTimeout(timeoutId);
-        unsubscribe();
-        reject(e);
-      });
-    });
+    } else {
+      // SDK doesn't work — use direct HTTP API
+      const token = getGitHubTokenFromAzure();
+      if (!token) {
+        return { success: false, error: 'No GitHub token available for HTTP fallback', model };
+      }
+      console.error(`[berean] Using direct HTTP API for review...`);
+      content = await chatCompletion(token, model, prompt, TIMEOUT_MS);
+    }
 
     if (!content) {
       // SDK returned empty — try direct HTTP as fallback
