@@ -4,8 +4,11 @@ import { chatCompletion } from './copilot-http.js';
 
 export interface ReviewIssue {
   severity: 'critical' | 'warning' | 'suggestion';
+  category: 'security' | 'bug' | 'performance' | 'error-handling' | 'maintainability' | 'data-integrity' | 'concurrency' | 'resource-leak';
+  confidence: number; // 0-100
   file?: string;
   line?: number;
+  title: string;
   message: string;
   suggestion?: string;
 }
@@ -14,6 +17,7 @@ export interface ReviewResult {
   success: boolean;
   review?: string;
   summary?: string;
+  recommendation?: 'APPROVE' | 'APPROVE_WITH_SUGGESTIONS' | 'NEEDS_CHANGES' | 'NEEDS_DISCUSSION';
   issues?: ReviewIssue[];
   positives?: string[];
   recommendations?: string[];
@@ -26,6 +30,7 @@ export interface ReviewOptions {
   language?: string;
   maxTokens?: number;
   rules?: string; // Custom rules/guidelines content to include in the prompt
+  confidenceThreshold?: number; // default 75
 }
 
 // Singleton client instance
@@ -69,16 +74,17 @@ export async function reviewCode(
   options: ReviewOptions = {}
 ): Promise<ReviewResult> {
   const { model = 'gpt-4o', language = 'English', rules } = options;
+  const confidenceThreshold = options.confidenceThreshold ?? 75;
 
   try {
     const client = await getClient();
 
-    const systemPrompt = buildReviewPrompt(language, rules);
-    const prompt = `${systemPrompt}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
+    const { system, user } = buildReviewPrompt(language, diff, rules);
+    const promptSize = system.length + user.length;
 
     console.error(`[berean] Token source: ${getGitHubTokenFromAzure() ? 'env var' : 'SDK default'}`);
     console.error(`[berean] Node version: ${process.version}`);
-    console.error(`[berean] Prompt size: ${prompt.length} chars (~${Math.round(prompt.length / 4)} tokens)`);
+    console.error(`[berean] Prompt size: ${promptSize} chars (~${Math.round(promptSize / 4)} tokens)`);
     
     // Quick connectivity test via SDK (30s) — if it fails, go straight to HTTP
     console.error(`[berean] Starting client...`);
@@ -104,7 +110,7 @@ export async function reviewCode(
     if (sdkWorks) {
       // SDK works — use it for the real review
       console.error(`[berean] Using SDK for review...`);
-      const session = await client.createSession({ model, streaming: false });
+      const session = await client.createSession({ model, streaming: false, systemMessage: { content: system } });
 
       content = await new Promise<string>((resolve, reject) => {
         let result = '';
@@ -159,8 +165,8 @@ export async function reviewCode(
           }
         });
 
-        console.error(`[berean] Sending prompt (${prompt.length} chars)...`);
-        session.send({ prompt }).catch((e: Error) => {
+        console.error(`[berean] Sending prompt (${user.length} chars)...`);
+        session.send({ prompt: user }).catch((e: Error) => {
           if (settleTimer) clearTimeout(settleTimer);
           clearTimeout(timeoutId);
           unsubscribe();
@@ -174,7 +180,7 @@ export async function reviewCode(
         return { success: false, error: 'No GitHub token available for HTTP fallback', model };
       }
       console.error(`[berean] Using direct HTTP API for review...`);
-      content = await chatCompletion(token, model, prompt, TIMEOUT_MS);
+      content = await chatCompletion(token, model, system, user, TIMEOUT_MS);
     }
 
     if (!content) {
@@ -182,7 +188,7 @@ export async function reviewCode(
       const token = getGitHubTokenFromAzure();
       if (token) {
         console.error(`[berean] SDK returned empty, trying direct HTTP API...`);
-        content = await chatCompletion(token, model, prompt, TIMEOUT_MS);
+        content = await chatCompletion(token, model, system, user, TIMEOUT_MS);
       }
     }
 
@@ -195,7 +201,11 @@ export async function reviewCode(
     }
 
     // Parse the JSON response
-    return parseReviewResponse(content, model);
+    const result = parseReviewResponse(content, model);
+    if (result.issues && confidenceThreshold) {
+      result.issues = result.issues.filter(i => (i.confidence || 100) >= confidenceThreshold);
+    }
+    return result;
 
   } catch (error) {
     // If SDK fails completely, try direct HTTP fallback
@@ -205,12 +215,15 @@ export async function reviewCode(
     if (token && (errMsg.includes('Timeout') || errMsg.includes('No response') || errMsg.includes('session.idle'))) {
       console.error(`[berean] SDK failed (${errMsg}), falling back to direct HTTP API...`);
       try {
-        const systemPromptFallback = buildReviewPrompt(language, rules);
-        const promptFallback = `${systemPromptFallback}\n\n---\n\nHere is the code diff to review:\n\n${diff}`;
-        const content = await chatCompletion(token, model, promptFallback, 300_000);
+        const { system: systemFallback, user: userFallback } = buildReviewPrompt(language, diff, rules);
+        const content = await chatCompletion(token, model, systemFallback, userFallback, 300_000);
         
         if (content) {
-          return parseReviewResponse(content, model);
+          const result = parseReviewResponse(content, model);
+          if (result.issues && confidenceThreshold) {
+            result.issues = result.issues.filter(i => (i.confidence || 100) >= confidenceThreshold);
+          }
+          return result;
         }
       } catch (httpError) {
         console.error(`[berean] HTTP fallback also failed: ${httpError instanceof Error ? httpError.message : httpError}`);
@@ -240,6 +253,7 @@ function parseReviewResponse(content: string, model: string): ReviewResult {
 
     let parsed: {
       summary?: string;
+      recommendation?: ReviewResult['recommendation'];
       issues?: ReviewResult['issues'];
       positives?: string[];
       recommendations?: string[];
@@ -280,6 +294,7 @@ function parseReviewResponse(content: string, model: string): ReviewResult {
       return {
         success: true,
         summary: parsed.summary,
+        recommendation: parsed.recommendation,
         issues: parsed.issues,
         positives: parsed.positives,
         recommendations: parsed.recommendations,
@@ -302,45 +317,77 @@ function parseReviewResponse(content: string, model: string): ReviewResult {
   }
 }
 
-function buildReviewPrompt(language: string, rules?: string): string {
-  let prompt = `You are an expert code reviewer. Analyze the provided code changes (git diff) and provide a comprehensive review.
+function buildReviewPrompt(language: string, diff: string, rules?: string): { system: string; user: string } {
+  let system = `You are an expert code reviewer with deep expertise in software engineering best practices, security vulnerabilities, performance optimization, and code quality. Your role is advisory — provide clear, actionable feedback on code quality and potential issues.
 
-You MUST respond with ONLY a valid JSON object (no markdown, no code blocks, no extra text). The JSON must contain:
+You MUST respond with ONLY a valid JSON object (no markdown, no code blocks, no extra text). The JSON must follow this exact schema:
 
 {
-  "summary": "Brief summary of what the changes do (2-3 sentences)",
+  "summary": "2-3 sentences describing what the changes do and overall assessment",
+  "recommendation": "APPROVE | APPROVE_WITH_SUGGESTIONS | NEEDS_CHANGES | NEEDS_DISCUSSION",
   "issues": [
     {
-      "severity": "critical|warning|suggestion",
+      "severity": "critical | warning | suggestion",
+      "category": "security | bug | performance | error-handling | maintainability | data-integrity | concurrency | resource-leak",
+      "confidence": 85,
       "file": "/path/to/file.ts",
       "line": 42,
-      "message": "Description of the issue and how to fix it",
-      "suggestion": "Optional: corrected code snippet if applicable"
+      "title": "Brief one-line title of the issue",
+      "message": "Detailed description of the issue, why it matters, and how to fix it",
+      "suggestion": "Optional: corrected code snippet"
     }
   ],
-  "positives": ["List of good practices observed"],
+  "positives": ["List of good practices observed in the code"],
   "recommendations": ["General recommendations for improvement"]
 }
 
+CONFIDENCE THRESHOLDS — Only report issues where you have high confidence:
+- CRITICAL (95%+): Security vulnerabilities, data loss risks, crashes, authentication bypasses
+- WARNING (85%+): Bugs, logic errors, performance issues, unhandled errors
+- SUGGESTION (75%+): Code quality improvements, best practices, maintainability
+- Below 75%: Do NOT report — insufficient confidence
+
+CATEGORIES:
+- security: Injection, auth issues, data exposure, insecure defaults
+- bug: Logic errors, null/undefined handling, race conditions, incorrect behavior
+- performance: Inefficient algorithms, memory leaks, unnecessary computations
+- error-handling: Missing try-catch, unhandled promises, silent failures
+- maintainability: Code complexity, duplication, poor abstractions
+- data-integrity: Data validation, type coercion issues, boundary conditions
+- concurrency: Race conditions, deadlocks, thread safety
+- resource-leak: Unclosed connections, file handles, event listeners
+
+DO NOT REPORT:
+- Style preferences that don't affect functionality
+- Minor naming suggestions unless severely misleading
+- Import ordering or grouping preferences
+- Whitespace or formatting issues
+- Patterns that are conventional in the language/framework being used
+- Minor refactoring that doesn't improve readability or performance meaningfully
+- Personal coding preferences
+
+RECOMMENDATION CRITERIA:
+- APPROVE: No issues found, or only minor suggestions with confidence < 80
+- APPROVE_WITH_SUGGESTIONS: Only suggestions (no warnings/critical), code is safe to merge
+- NEEDS_CHANGES: Has warnings or critical issues that should be fixed before merge
+- NEEDS_DISCUSSION: Has architectural concerns or trade-offs that need team discussion
+
 CRITICAL RULES:
-1. Response must be ONLY the JSON object - no markdown, no \`\`\`json blocks, just raw JSON
-2. "file" must be the EXACT file path as shown in the diff (e.g., "/src/services/api.ts")
-3. "line" must be a specific line number from the NEW version of the file
-4. "issues" array can be empty [] if there are no problems
+1. Response must be ONLY the JSON object — no markdown, no \`\`\`json blocks, just raw JSON
+2. "file" must be the EXACT file path as shown in the diff headers
+3. "line" must be a line number from the NEW version of the file (lines with + prefix)
+4. "issues" array can be empty [] if there are no problems above confidence threshold
 5. All text content must be in ${language}
-
-Severity levels:
-- critical: Security vulnerabilities, bugs that will cause crashes, data loss
-- warning: Code smells, potential bugs, performance issues
-- suggestion: Style improvements, refactoring opportunities
-
-Be specific and actionable. If the code is good, return empty issues array and list positives.`;
+6. Be specific and actionable — vague suggestions are worse than no suggestions
+7. Each issue MUST have a "title" field with a brief one-line description`;
 
   if (rules) {
-    prompt += `\n\n---\n\nPROJECT-SPECIFIC RULES AND GUIDELINES (use these to evaluate the code):\n\n${rules}`;
+    system += `\n\n---\n\nPROJECT-SPECIFIC RULES AND GUIDELINES (use these to evaluate the code, they take priority over general rules):\n\n${rules}`;
   }
 
-  return prompt;
+  const user = `Here is the code diff to review:\n\n${diff}`;
+
+  return { system, user };
 }
 
 export interface ModelDetail {
