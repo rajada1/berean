@@ -27,9 +27,11 @@
     "@github/copilot-sdk": "^0.1.23",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
+    "diff": "^8.0.3",
     "ora": "^8.0.1"
   },
   "devDependencies": {
+    "@types/diff": "^7.0.2",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   },

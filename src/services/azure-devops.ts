@@ -1,4 +1,5 @@
 import { getAzureDevOpsPATFromPipeline } from './credentials.js';
+import { createTwoFilesPatch } from 'diff';
 
 export interface PRInfo {
   organization: string;
@@ -207,7 +208,7 @@ export async function fetchPRDiff(prInfo: PRInfo): Promise<PRDiffResult> {
     }
 
     const MAX_FILES = 40;
-    const MAX_FILE_CHARS = 5000;
+    const MAX_FILE_CHARS = 8000;
     
     // Prioritize code files
     const codeExtensions = ['.js', '.ts', '.py', '.cs', '.java', '.go', '.rs', '.cpp', '.c', '.jsx', '.tsx', '.vue', '.rb', '.php'];
@@ -263,7 +264,7 @@ export async function fetchPRDiff(prInfo: PRInfo): Promise<PRDiffResult> {
                 if (targetResponse.ok) {
                   const targetData = await targetResponse.json() as { content?: string };
                   const targetContent = targetData.content || '';
-                  const diff = generateSimpleDiff(targetContent, content, MAX_FILE_CHARS);
+                  const diff = generateUnifiedDiff(targetContent, content, path, MAX_FILE_CHARS);
                   
                   if (diff) {
                     fileSection += '```diff\n' + diff + '\n```\n';
@@ -328,48 +329,87 @@ function getChangeTypeName(changeType?: number): string {
   return types[changeType || 0] || 'Change';
 }
 
-function generateSimpleDiff(oldContent: string, newContent: string, maxChars: number): string {
-  const oldLines = oldContent.split('\n');
-  const newLines = newContent.split('\n');
-  
-  const result: string[] = [];
-  let chars = 0;
-  
-  let oldIdx = 0;
-  let newIdx = 0;
-  
-  while ((oldIdx < oldLines.length || newIdx < newLines.length) && chars < maxChars) {
-    const oldLine = oldLines[oldIdx];
-    const newLine = newLines[newIdx];
-    
-    if (oldIdx >= oldLines.length) {
-      const line = `+ ${newLine}`;
-      result.push(line);
-      chars += line.length;
-      newIdx++;
-    } else if (newIdx >= newLines.length) {
-      const line = `- ${oldLine}`;
-      result.push(line);
-      chars += line.length;
-      oldIdx++;
-    } else if (oldLine === newLine) {
-      oldIdx++;
-      newIdx++;
-    } else {
-      const line1 = `- ${oldLine}`;
-      const line2 = `+ ${newLine}`;
-      result.push(line1, line2);
-      chars += line1.length + line2.length;
-      oldIdx++;
-      newIdx++;
+/**
+ * Generate a unified diff with context lines using Myers diff algorithm.
+ * Output format matches `git diff --unified=3`.
+ */
+function generateUnifiedDiff(
+  oldContent: string,
+  newContent: string,
+  filePath: string,
+  maxChars: number
+): string {
+  const patch = createTwoFilesPatch(
+    `a${filePath}`,
+    `b${filePath}`,
+    oldContent,
+    newContent,
+    '', // old header
+    '', // new header
+    { context: 3 }
+  );
+
+  // Remove the first two lines (diff --git header and index line) if present
+  // Keep the --- and +++ lines and hunks
+  const lines = patch.split('\n');
+  let startIdx = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith('@@')) {
+      startIdx = i;
+      break;
+    }
+    // Keep --- and +++ lines
+    if (lines[i].startsWith('---') || lines[i].startsWith('+++')) {
+      if (startIdx === 0) startIdx = i;
     }
   }
-  
-  if (chars >= maxChars) {
-    result.push('... (diff truncated)');
+
+  const relevantLines = lines.slice(startIdx);
+  const result = relevantLines.join('\n');
+
+  // Truncate by complete hunks if too long
+  if (result.length <= maxChars) {
+    return result;
   }
-  
-  return result.join('\n');
+
+  return truncateByHunks(result, maxChars);
+}
+
+/**
+ * Truncate diff output by complete hunks to avoid cutting in the middle of a change.
+ */
+function truncateByHunks(diffText: string, maxChars: number): string {
+  const lines = diffText.split('\n');
+  const hunks: string[][] = [];
+  let currentHunk: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith('@@') && currentHunk.length > 0) {
+      hunks.push(currentHunk);
+      currentHunk = [line];
+    } else {
+      currentHunk.push(line);
+    }
+  }
+  if (currentHunk.length > 0) {
+    hunks.push(currentHunk);
+  }
+
+  let result = '';
+  let hunkCount = 0;
+
+  for (const hunk of hunks) {
+    const hunkText = hunk.join('\n');
+    if (result.length + hunkText.length + 1 > maxChars && hunkCount > 0) {
+      result += '\n... (diff truncated, remaining hunks omitted)';
+      break;
+    }
+    if (hunkCount > 0) result += '\n';
+    result += hunkText;
+    hunkCount++;
+  }
+
+  return result;
 }
 
 export interface PostCommentResult {

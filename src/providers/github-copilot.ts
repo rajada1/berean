@@ -380,7 +380,40 @@ CRITICAL RULES:
 5. All text content must be in ${language}
 6. Be specific and actionable — vague suggestions are worse than no suggestions
 7. Each issue MUST have a "title" field with a brief one-line description
-8. "suggestion" must contain ONLY clean, ready-to-apply code — NO instructional comments (e.g., "// remove this", "// add this", "// changed"). Explanations go in "message", code goes in "suggestion"`;
+8. "suggestion" must contain ONLY executable code ready to replace the problematic code. If you cannot provide exact replacement code, OMIT the "suggestion" field entirely — do NOT put explanatory text, instructions, or pseudo-code in it. The "message" field is where explanations belong.
+
+SUGGESTION FIELD EXAMPLES:
+
+GOOD suggestion (exact replacement code):
+{
+  "title": "Missing null check",
+  "message": "The variable 'user' can be null when the API returns 404. Add a null check before accessing properties.",
+  "suggestion": "if (user == null) {\\n  throw new Error('User not found');\\n}"
+}
+
+BAD suggestion (descriptive text — DO NOT do this):
+{
+  "title": "Missing null check",
+  "message": "The variable 'user' can be null...",
+  "suggestion": "Add a null check before accessing user properties and handle the null case appropriately"
+}
+→ This is wrong because 'suggestion' contains text instructions, not code. Either provide exact code or omit the field.
+
+BAD suggestion (mixed code and comments — DO NOT do this):
+{
+  "title": "Hardcoded token",
+  "message": "Token should come from token manager...",
+  "suggestion": "// Remove the line below\\n// const tk = 'token';\\nfinal token = await getToken();\\noptions.headers['Auth'] = 'Bearer $token';"
+}
+→ This is wrong because it includes instructional comments. The suggestion should contain ONLY the final code.
+
+GOOD (when you can't provide exact code — omit the field):
+{
+  "title": "Complex refactoring needed",
+  "message": "The authentication flow should use the token manager instead of hardcoded tokens. Replace the hardcoded 'tk' constant with a call to _tokenManager.getValidToken() and update the Authorization header accordingly.",
+  "confidence": 90
+}
+→ No "suggestion" field at all — this is correct when exact replacement code would be complex or context-dependent.`;
 
   if (rules) {
     system += `\n\n---\n\nPROJECT-SPECIFIC RULES AND GUIDELINES (use these to evaluate the code, they take priority over general rules):\n\n${rules}`;
