@@ -334,7 +334,7 @@ You MUST respond with ONLY a valid JSON object (no markdown, no code blocks, no 
       "line": 42,
       "title": "Brief one-line title of the issue",
       "message": "Detailed description of the issue, why it matters, and how to fix it",
-      "suggestion": "Optional: corrected code snippet"
+      "suggestion": "Optional: ONLY the corrected code that should replace the problematic code. Must be clean, ready-to-apply code — NO explanatory comments like '// remove this line', '// add this', '// changed from X to Y', etc. The suggestion must contain ONLY the final code the developer should use."
     }
   ],
   "positives": ["List of good practices observed in the code"],
@@ -379,7 +379,8 @@ CRITICAL RULES:
 4. "issues" array can be empty [] if there are no problems above confidence threshold
 5. All text content must be in ${language}
 6. Be specific and actionable — vague suggestions are worse than no suggestions
-7. Each issue MUST have a "title" field with a brief one-line description`;
+7. Each issue MUST have a "title" field with a brief one-line description
+8. "suggestion" must contain ONLY clean, ready-to-apply code — NO instructional comments (e.g., "// remove this", "// add this", "// changed"). Explanations go in "message", code goes in "suggestion"`;
 
   if (rules) {
     system += `\n\n---\n\nPROJECT-SPECIFIC RULES AND GUIDELINES (use these to evaluate the code, they take priority over general rules):\n\n${rules}`;
