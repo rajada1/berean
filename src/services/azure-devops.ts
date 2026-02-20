@@ -16,9 +16,16 @@ export interface PRDetails {
   targetBranch: string;
 }
 
+export interface FileContent {
+  path: string;
+  content: string;
+  changeType: string;
+}
+
 export interface PRDiffResult {
   success: boolean;
   diff?: string;
+  files?: FileContent[];
   prDetails?: PRDetails;
   error?: string;
 }
@@ -209,6 +216,8 @@ export async function fetchPRDiff(prInfo: PRInfo): Promise<PRDiffResult> {
 
     const MAX_FILES = 40;
     const MAX_FILE_CHARS = 8000;
+    const MAX_FULL_FILE_CHARS = 15000;
+    const MAX_TOTAL_CONTEXT_CHARS = 120000;
     
     // Prioritize code files
     const codeExtensions = ['.js', '.ts', '.py', '.cs', '.java', '.go', '.rs', '.cpp', '.c', '.jsx', '.tsx', '.vue', '.rb', '.php'];
@@ -223,6 +232,9 @@ export async function fetchPRDiff(prInfo: PRInfo): Promise<PRDiffResult> {
     });
 
     const filesToProcess = sortedEntries.slice(0, MAX_FILES);
+
+    const files: FileContent[] = [];
+    let totalContextChars = 0;
 
     for (const entry of filesToProcess) {
       const path = entry.item?.path || entry.path;
@@ -246,7 +258,16 @@ export async function fetchPRDiff(prInfo: PRInfo): Promise<PRDiffResult> {
             const contentData = await contentResponse.json() as { content?: string };
             if (contentData.content) {
               const content = contentData.content;
-              
+
+              // Collect full file content for context
+              if (
+                content.length <= MAX_FULL_FILE_CHARS &&
+                totalContextChars + content.length <= MAX_TOTAL_CONTEXT_CHARS
+              ) {
+                files.push({ path, content, changeType });
+                totalContextChars += content.length;
+              }
+
               if (changeType === 'Add') {
                 const truncated = content.substring(0, MAX_FILE_CHARS);
                 fileSection += '```diff\n' + truncated.split('\n').map((l: string) => '+ ' + l).join('\n');
@@ -302,6 +323,7 @@ export async function fetchPRDiff(prInfo: PRInfo): Promise<PRDiffResult> {
     return {
       success: true,
       diff: diffContent,
+      files,
       prDetails: {
         title: prData.title,
         description: prData.description || '',

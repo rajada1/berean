@@ -204,6 +204,7 @@ export const reviewCommand = new Command('review')
       model: model,
       language: language,
       rules: rules,
+      files: diffResult.files,
       confidenceThreshold: options.confidenceThreshold ? parseInt(options.confidenceThreshold, 10) : undefined
     });
 

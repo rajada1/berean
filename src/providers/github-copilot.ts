@@ -31,6 +31,7 @@ export interface ReviewOptions {
   maxTokens?: number;
   rules?: string; // Custom rules/guidelines content to include in the prompt
   confidenceThreshold?: number; // default 75
+  files?: { path: string; content: string; changeType: string }[];
 }
 
 // Singleton client instance
@@ -73,13 +74,13 @@ export async function reviewCode(
   diff: string,
   options: ReviewOptions = {}
 ): Promise<ReviewResult> {
-  const { model = 'gpt-4o', language = 'English', rules } = options;
+  const { model = 'gpt-4o', language = 'English', rules, files } = options;
   const confidenceThreshold = options.confidenceThreshold ?? 75;
 
   try {
     const client = await getClient();
 
-    const { system, user } = buildReviewPrompt(language, diff, rules);
+    const { system, user } = buildReviewPrompt(language, diff, rules, files);
     const promptSize = system.length + user.length;
 
     console.error(`[berean] Token source: ${getGitHubTokenFromAzure() ? 'env var' : 'SDK default'}`);
@@ -215,7 +216,7 @@ export async function reviewCode(
     if (token && (errMsg.includes('Timeout') || errMsg.includes('No response') || errMsg.includes('session.idle'))) {
       console.error(`[berean] SDK failed (${errMsg}), falling back to direct HTTP API...`);
       try {
-        const { system: systemFallback, user: userFallback } = buildReviewPrompt(language, diff, rules);
+        const { system: systemFallback, user: userFallback } = buildReviewPrompt(language, diff, rules, files);
         const content = await chatCompletion(token, model, systemFallback, userFallback, 300_000);
         
         if (content) {
@@ -317,7 +318,63 @@ function parseReviewResponse(content: string, model: string): ReviewResult {
   }
 }
 
-function buildReviewPrompt(language: string, diff: string, rules?: string): { system: string; user: string } {
+// Map file extensions to language identifiers for code blocks
+const EXT_TO_LANG: Record<string, string> = {
+  'ts': 'typescript',
+  'tsx': 'typescript',
+  'js': 'javascript',
+  'jsx': 'javascript',
+  'py': 'python',
+  'rb': 'ruby',
+  'java': 'java',
+  'cs': 'csharp',
+  'go': 'go',
+  'rs': 'rust',
+  'cpp': 'cpp',
+  'c': 'c',
+  'h': 'c',
+  'hpp': 'cpp',
+  'php': 'php',
+  'swift': 'swift',
+  'kt': 'kotlin',
+  'scala': 'scala',
+  'vue': 'vue',
+  'html': 'html',
+  'css': 'css',
+  'scss': 'scss',
+  'less': 'less',
+  'json': 'json',
+  'yaml': 'yaml',
+  'yml': 'yaml',
+  'xml': 'xml',
+  'sql': 'sql',
+  'sh': 'bash',
+  'bash': 'bash',
+  'md': 'markdown',
+  'dart': 'flutter',
+  'r': 'r',
+  'lua': 'lua',
+  'ex': 'elixir',
+  'exs': 'elixir',
+  'erl': 'erlang',
+  'hs': 'haskell',
+  'tf': 'hcl',
+  'toml': 'toml',
+  
+
+};
+
+function getLanguageFromPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  return EXT_TO_LANG[ext] || ext;
+}
+
+function buildReviewPrompt(
+  language: string,
+  diff: string,
+  rules?: string,
+  files?: { path: string; content: string; changeType: string }[]
+): { system: string; user: string } {
   let system = `You are an expert code reviewer with deep expertise in software engineering best practices, security vulnerabilities, performance optimization, and code quality. Your role is advisory — provide clear, actionable feedback on code quality and potential issues.
 
 You MUST respond with ONLY a valid JSON object (no markdown, no code blocks, no extra text). The JSON must follow this exact schema:
@@ -419,7 +476,24 @@ GOOD (when you can't provide exact code — omit the field):
     system += `\n\n---\n\nPROJECT-SPECIFIC RULES AND GUIDELINES (use these to evaluate the code, they take priority over general rules):\n\n${rules}`;
   }
 
-  const user = `Here is the code diff to review:\n\n${diff}`;
+  // Build file context section if files are provided
+  let fileContext = '';
+  if (files && files.length > 0) {
+    fileContext = '\n\n## Full File Contents (for context)\n\n';
+    fileContext += 'Below are the complete contents of the modified files. ';
+    fileContext += 'Use these to understand the full context when reviewing the diff changes that follow.\n';
+
+    for (const file of files) {
+      const lang = getLanguageFromPath(file.path);
+      fileContext += `\n### ${file.path}\n`;
+      fileContext += `\`\`\`${lang}\n${file.content}\n\`\`\`\n`;
+      fileContext += '\n---\n';
+    }
+  }
+
+  const user = fileContext
+    ? `${fileContext}\n## Code Diff to Review\n\n${diff}`
+    : `Here is the code diff to review:\n\n${diff}`;
 
   return { system, user };
 }
