@@ -11,7 +11,8 @@ echo "📦 Installing Berean..."
 if [ -d "$INSTALL_DIR" ]; then
   echo "  Updating existing installation..."
   cd "$INSTALL_DIR"
-  git pull --ff-only
+  git fetch origin
+  git reset --hard origin/main
 else
   echo "  Cloning from GitHub..."
   git clone "$REPO" "$INSTALL_DIR"
